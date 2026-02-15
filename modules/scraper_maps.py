@@ -49,6 +49,8 @@ class MapsHunter:
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--remote-allow-origins=*")
+            # Cloud Compatibility
+            options.add_argument("--headless=new")
             return webdriver.Edge(options=options)
 
         # Helper to launch Chrome
@@ -59,6 +61,8 @@ class MapsHunter:
             options.add_argument("--disable-gpu")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
+            # Cloud Compatibility
+            options.add_argument("--headless=new")
             # Cleanup patcher
             patcher_path = os.path.join(os.environ.get('APPDATA'), 'undetected_chromedriver', 'undetected_chromedriver.exe')
             if os.path.exists(patcher_path):
@@ -74,6 +78,7 @@ class MapsHunter:
                 options.add_argument("--disable-gpu")
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--headless=new")
                 return uc.Chrome(options=options, use_subprocess=True, version_main=144)
 
         try:

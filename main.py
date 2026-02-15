@@ -32,30 +32,18 @@ if sys.version_info >= (3, 12):
         sys.modules['distutils.version'].LooseVersion = LooseVersion
 
 # Import Modules
-# Import Modules
-print("DEBUG: Importing CRM...")
 from modules.crm import LeadManager
-print("DEBUG: Importing Visuals...")
 from modules.visuals import StudioGallery
 # from modules.outreach_whatsapp import WhatsAppSniper # Moved local
-print("DEBUG: Importing Email...")
 from modules.outreach_email import EmailBlaster
 import urllib.parse
-print("DEBUG: Importing AI Engine...")
 from modules.ai_engine import AIGhostwriter, VisualStudio
-print("DEBUG: Importing Cinema...")
 from modules.cinema import CinemaDirector
-print("DEBUG: Importing Presenter...")
 from modules.presenter import PresenterProducer
-print("DEBUG: Importing Architect...")
 from modules.architect import VoltsArchitect
-print("DEBUG: Importing Voice Studio...")
 from modules.voice_studio import VoiceStudio
-print("DEBUG: Importing Call Center...")
 from modules.outreach_voice import CallCenter
-print("DEBUG: Importing UI Components...")
 from modules import ui_components as uic
-print("DEBUG: Importing Database...")
 from modules import database as db
 
 load_dotenv()
@@ -69,14 +57,10 @@ st.set_page_config(
 )
 
 # --- INIT ---
-print("DEBUG: Applying Custom CSS...")
 uic.apply_custom_css()
-print("DEBUG: Init Terminal...")
 uic.init_terminal()
-print("DEBUG: Init DB...")
 db.init_db()
 
-print("DEBUG: SYSTEM INITIALIZED. DASHBOARD ACTIVE.")
 uic.log_message("SYSTEM INITIALIZED. DASHBOARD ACTIVE.")
 
 # --- SIDEBAR NAVIGATION ---
