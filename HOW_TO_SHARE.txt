@@ -1,0 +1,41 @@
+________________________________________________________________________________
+           HOW TO SHARE 'VOLTS' WITH YOUR FRIEND
+________________________________________________________________________________
+
+STEP 1: PREPARE THE FILES
+-------------------------
+You need to send him the folder, but NOT everything. 
+The easiest way is to ZIP the "Leads app" folder, but EXCLUDE the big "venv" folder if it exists.
+
+FILES HE NEEDS:
+[x] main.py
+[x] requirements.txt
+[x] run_volts.bat
+[x] modules/ (Folder)
+[x] assets/ (Folder)
+[x] .env (OR .env.template) <-- READ STEP 2
+
+STEP 2: API KEYS (IMPORTANT)
+----------------------------
+You have two choices:
+
+OPTION A: HE USES YOUR KEYS (Easiest for him, You pay)
+- Send him your ".env" file.
+- PRO: He just clicks run.
+- CON: If he generates 1,000 videos, you get the bill.
+
+OPTION B: HE USES HIS OWN KEYS (Best for you)
+- Rename ".env" to ".env.template" before zipping (or just delete .env in his copy).
+- Tell him: "Open .env.template, paste your GEMINI_API_KEY, and rename it to .env"
+
+STEP 3: HOW HE INSTALLS IT
+--------------------------
+1. He unzips the folder on his laptop.
+2. He double-clicks "run_volts.bat".
+3. THAT'S IT. 
+
+The script will automatically:
+- Create a virtual environment.
+- Install all libraries.
+- Open the app in his browser.
+________________________________________________________________________________
