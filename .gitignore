@@ -62,3 +62,9 @@ reproduce_*.py
 test_upload.txt
 debug_*.html
 ddg_*.html
+
+# Generated Assets (Exclude to save space)
+assets/generated_voice/
+assets/videos/
+assets/voice_previews/
+assets/studio/

@@ -1,0 +1,10 @@
+[theme]
+# Volts Design: Ultra-Luxury / Editorial Brutalism
+# Minimalist, Stark, Elegant.
+
+primaryColor = "#D4AF37"  # Metallic Gold (Luxury Accent)
+backgroundColor = "#050505" # Deep Black (Void)
+secondaryBackgroundColor = "#111111" # Dark Grey (Panels)
+textColor = "#EAEAEA" # Off-White (Softened Contrast)
+font = "serif" # Elegant Serif (Editorial feel)
+base = "dark"
