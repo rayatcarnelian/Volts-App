@@ -652,6 +652,68 @@ class ImageExpander:
 
 
 # ============================================================================
+# VIDEO GENERATOR (Luma Ray + Minimax)
+# ============================================================================
+
+class VideoGenerator:
+    """
+    Generates high-end video using Luma Ray and Minimax via Replicate.
+    """
+    
+    MODELS = {
+        "luma": "luma/ray",
+        "minimax": "minimax/video-01"
+    }
+    
+    def __init__(self):
+        self.api_token = os.getenv("REPLICATE_API_TOKEN")
+        self.client = None
+        
+        if self.api_token:
+            try:
+                import replicate
+                self.client = replicate.Client(api_token=self.api_token)
+            except ImportError:
+                pass
+                
+    def generate(
+        self,
+        prompt: str,
+        start_image_path: str = None,
+        model_name: str = "luma", # luma or minimax
+        duration: int = 5 
+    ) -> str:
+        """
+        Generate video from text or image.
+        """
+        if not self.client:
+            raise ValueError("Replicate API Token missing.")
+            
+        model_id = self.MODELS.get(model_name, self.MODELS["luma"])
+        
+        input_params = {
+            "prompt": prompt,
+            "duration": duration,
+            "aspect_ratio": "16:9"
+        }
+        
+        # Image-to-Video Logic
+        if start_image_path and os.path.exists(start_image_path):
+            with open(start_image_path, "rb") as f:
+                img_data = base64.b64encode(f.read()).decode()
+                
+            if model_name == "luma":
+                 input_params["start_image_url"] = f"data:image/jpeg;base64,{img_data}"
+            elif model_name == "minimax":
+                 input_params["first_frame_image"] = f"data:image/jpeg;base64,{img_data}"
+
+        try:
+            output = self.client.run(model_id, input=input_params)
+            return str(output)
+        except Exception as e:
+            raise RuntimeError(f"Video Generation Failed: {e}")
+
+# ============================================================================
 # MASTER ORCHESTRATOR
 # ============================================================================
 
@@ -667,7 +729,12 @@ class PremiumStudio:
         self.upscaler = ImageUpscaler()
         self.variator = ImageVariator()
         self.expander = ImageExpander()
+        self.video_generator = VideoGenerator() # NEW
         self.config = GenerationConfig()
+        
+        # Initialize Subscription Manager
+        from modules.studio_subscription import SubscriptionManager
+        self.subscription = SubscriptionManager()
     
     def generate(
         self,
@@ -683,21 +750,16 @@ class PremiumStudio:
     ) -> Dict:
         """
         Full-featured image generation.
-        
-        Args:
-            prompt: Base prompt
-            mode: "schnell", "dev", or "pro"
-            aspect_ratio: "square", "landscape_16_9", "portrait_9_16", etc.
-            style_preset: One of the style preset keys
-            style_reference_path: Path to style reference image
-            enhance_prompt: Whether to AI-enhance the prompt
-            negative_prompt: Things to avoid (appended)
-            seed: Random seed for reproducibility
-            save_dir: Directory to save generated images
-            
-        Returns:
-            Dict with generation results
         """
+        
+        # 0. Check Credits
+        if not self.subscription.can_generate_image():
+            return {
+                "success": False,
+                "error": "❌ OUT OF CREDITS. Please upgrade your plan to continue.",
+                "original_prompt": prompt
+            }
+
         os.makedirs(save_dir, exist_ok=True)
         timestamp = int(time.time())
         
@@ -759,6 +821,9 @@ class PremiumStudio:
                         # Path doesn't exist, something went wrong
                         saved_paths.append(result)
             
+            # 7. Deduct Credit on Success
+            self.subscription.deduct_image()
+
             return {
                 "success": True,
                 "mode": mode,
@@ -778,9 +843,56 @@ class PremiumStudio:
                 "enhanced_prompt": final_prompt
             }
     
+    def generate_video(
+        self,
+        prompt: str,
+        start_image_path: str = None,
+        model: str = "luma",
+        save_dir: str = "assets/studio/video"
+    ) -> Dict:
+        """
+        Generate video and save to disk.
+        """
+        # 0. Check Credits (Video is expensive: 10 credits)
+        if not self.subscription.can_generate_video(): # Need to implement this
+             return {"success": False, "error": "❌ OUT OF CREDITS. Video requires 10 Credits."}
+             
+        os.makedirs(save_dir, exist_ok=True)
+        timestamp = int(time.time())
+        
+        try:
+            video_url = self.video_generator.generate(prompt, start_image_path, model)
+            
+            # Download Video
+            response = requests.get(video_url, stream=True)
+            if response.status_code == 200:
+                filename = f"video_{timestamp}.mp4"
+                filepath = os.path.join(save_dir, filename)
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                # Deduct Credits
+                self.subscription.deduct_video()
+                
+                return {
+                    "success": True,
+                    "video_path": filepath,
+                    "url": video_url
+                }
+            else:
+                return {"success": False, "error": "Failed to download video."}
+                
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def create_variations(self, image_path: str, prompt: str = None, count: int = 4) -> Dict:
         """Generate variations of an image."""
         try:
+            urls = self.variator.create_variations(image_path, prompt, count)
+            return {"success": True, "images": urls} 
+        except Exception as e:
+            return {"success": False, "error": str(e)}
             urls = self.variator.create_variations(image_path, prompt, count)
             return {"success": True, "variations": urls}
         except Exception as e:

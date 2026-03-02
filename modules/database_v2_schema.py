@@ -22,6 +22,10 @@ def init_db():
             primary_phone TEXT,
             master_status TEXT DEFAULT 'New', -- 'New', 'Qualified', 'Client', 'Blacklisted'
             total_score INTEGER DEFAULT 0,
+            fit_score INTEGER DEFAULT 0,
+            engagement_score INTEGER DEFAULT 0,
+            recency_penalty INTEGER DEFAULT 0,
+            score_factors TEXT,
             full_address TEXT,
             lat REAL,
             lon REAL,
@@ -78,12 +82,83 @@ def init_db():
         )
     ''')
 
+    # 5. USERS (SaaS Authentication)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            tier TEXT DEFAULT 'FREE', -- 'FREE', 'PRO', 'AGENCY', 'ADMIN'
+            credits_image INTEGER DEFAULT 5,
+            credits_video INTEGER DEFAULT 0,
+            call_minutes_used REAL DEFAULT 0.0,
+            call_minutes_limit REAL DEFAULT 2.0, -- FREE = 2 min trial
+            created_at DATETIME,
+            last_login DATETIME
+        )
+    ''')
+
+    # --- MIGRATION: Add columns if they don't exist ---
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN call_minutes_used REAL DEFAULT 0.0")
+    except:
+        pass  # Column already exists
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN call_minutes_limit REAL DEFAULT 2.0")
+    except:
+        pass  # Column already exists
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN reset_token TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN reset_token_expiry DATETIME")
+    except:
+        pass
+
+    # --- MIGRATION: Leads Scoring (from V1) ---
+    try:
+        c.execute("ALTER TABLE leads ADD COLUMN fit_score INTEGER DEFAULT 0")
+    except: pass
+    try:
+        c.execute("ALTER TABLE leads ADD COLUMN engagement_score INTEGER DEFAULT 0")
+    except: pass
+    try:
+        c.execute("ALTER TABLE leads ADD COLUMN recency_penalty INTEGER DEFAULT 0")
+    except: pass
+    try:
+        c.execute("ALTER TABLE leads ADD COLUMN score_factors TEXT")
+    except: pass
+
     conn.commit()
     conn.close()
 
 # --- MIGRATION UTILS ---
 # We will keep the old 'add_lead' function momentarily to avoid breaking the app,
 # but internally it should route to the new tables.
+
+def get_all_leads():
+    """Returns all leads as a pandas DataFrame."""
+    conn = get_connection()
+    try:
+        df = pd.read_sql("SELECT * FROM leads ORDER BY id DESC", conn)
+        # Ensure expected columns exist even if empty
+        for col in ['name', 'primary_email', 'primary_phone', 'master_status', 'total_score', 'source', 'status']:
+            if col not in df.columns:
+                df[col] = ''
+        # Alias for backward compatibility
+        if 'master_status' in df.columns and 'status' not in df.columns:
+            df['status'] = df['master_status']
+        elif 'status' not in df.columns:
+            df['status'] = 'New'
+        if 'source' not in df.columns:
+            df['source'] = 'Unknown'
+        return df
+    except Exception as e:
+        print(f"get_all_leads error: {e}")
+        return pd.DataFrame(columns=['id', 'name', 'primary_email', 'primary_phone', 'status', 'source', 'total_score'])
+    finally:
+        conn.close()
 
 def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}):
     """

@@ -105,251 +105,147 @@ class MapsHunter:
             raise e
 
     def scan(self, keyword, limit=50):
+        """
+        Robust Scanning logic:
+        1. Scrolls to find 'limit' unique links (HREFs).
+        2. Visits each HREF directly to ensure data load (bypassing StaleElement issues).
+        """
         leads = []
         try:
             if not self.driver:
                 self._setup_driver()
                 
-            self.driver.get("https://www.google.com/maps")
-            
-            wait = WebDriverWait(self.driver, 20)
-            
-            # Check for Consent Modal (common in some regions)
-            try:
-                consent_button = WebDriverWait(self.driver, 5).until(
-                    EC.element_to_be_clickable((By.XPATH, "//button[contains(@aria-label, 'Accept all') or contains(text(), 'Accept all')]"))
-                )
-                consent_button.click()
-                time.sleep(2)
-            except:
-                pass
-
-            # Robust Search Box Finding
-            search_box = None
-            selectors = [
-                (By.ID, "searchboxinput"),
-                (By.NAME, "q"),
-                (By.CSS_SELECTOR, "input#searchboxinput"),
-                (By.XPATH, "//input[@id='searchboxinput']"),
-            ]
-
-            for by, val in selectors:
-                try:
-                    search_box = wait.until(EC.element_to_be_clickable((by, val)))
-                    if search_box:
-                        break
-                except:
-                    continue
-            
-            if not search_box:
-                self._log("Failed to locate Google Maps search bar. Saving debug screenshot...", "error")
-                try:
-                    self.driver.save_screenshot("maps_debug_error.png")
-                    st.image("maps_debug_error.png") # Image still needs st, wrap it?
-                except: pass
-                return []
-
-            search_box.clear()
-            search_box.send_keys(keyword)
-            search_box.send_keys(Keys.ENTER)
-            
-            # Wait for results to load
+            # Direct Search URL
             self._log(f"Searching for '{keyword}'...", "info")
-            time.sleep(3) 
-
-            # Smart Wait for Results
+            self.driver.get(f"https://www.google.com/maps/search/{keyword}")
+            
+            wait = WebDriverWait(self.driver, 15)
+            
+            # Consent
             try:
-                # Wait for at least one result link
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "a[href*='/maps/place']")))
-            except:
-                self._log("Slow network or no results found yet...", "warning")
+                consent = WebDriverWait(self.driver, 3).until(EC.element_to_be_clickable((By.XPATH, "//button[contains(@aria-label, 'Accept all')]")))
+                consent.click()
+            except: pass
+            
+            time.sleep(3)
 
-            # Scroll Logic (Smart Scroll)
-            self._log(f"Loading results (Target: {limit})...", "info")
+            # --- PHASE 1: COLLECT LINKS ---
+            self._log(f"Phase 1: Collecting {limit} targets...", "info")
+            
+            unique_links = {} # clean_url -> full_url
+            attempts = 0
+            
+            # Basic feed finder
             feed = None
             try:
                 feed = self.driver.find_element(By.CSS_SELECTOR, "div[role='feed']")
-            except:
-                pass
-
-            # Dynamic Scroll Loop
-            unique_links = {} # Map href -> element
-            attempts = 0
-            stuck_count = 0
-            last_count = 0
+            except: pass
             
-            # We scroll until we have enough unique links OR give up
-            while len(unique_links) < limit and attempts < limit: 
-                # Scroll action
+            # Scroll Loop
+            # We allow more scroll attempts to ensure we find enough agents
+            while len(unique_links) < limit and attempts < (limit * 2):
+                # Scroll
                 try:
                     if feed:
                         self.driver.execute_script("arguments[0].scrollTop = arguments[0].scrollHeight", feed)
                     else:
-                        search_box.send_keys(Keys.PAGE_DOWN)
-                        search_box.send_keys(Keys.PAGE_DOWN)
-                    time.sleep(2) # Allow load
-                except:
-                    pass
+                        # Fallback for main body
+                        self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
+                except: pass
                 
-                # Collect currently visible links
-                links = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/maps/place']")
-                for l in links:
-                    h = l.get_attribute("href")
-                    # Basic normalization to avoid session-based dupes
-                    if h:
-                        clean_h = h.split('?')[0] # Remove query params for uniqueness check
-                        if clean_h not in unique_links:
-                            unique_links[clean_h] = l
+                time.sleep(1.5)
                 
-                count = len(unique_links)
-                if count == last_count:
-                    stuck_count += 1
-                    # If stuck, try to wiggle or zoom? Just wait longer.
-                    if stuck_count > 2:
-                        try: 
-                            search_box.send_keys(Keys.PAGE_DOWN)
-                            time.sleep(1)
-                        except: pass
-                else:
-                    stuck_count = 0
-                    
-                last_count = count
+                # Check links
+                els = self.driver.find_elements(By.CSS_SELECTOR, "a[href*='/maps/place']")
+                for e in els:
+                    href = e.get_attribute("href")
+                    if href:
+                        clean = href.split('?')[0]
+                        if clean not in unique_links:
+                             unique_links[clean] = href
                 
-                if count >= limit:
+                # Update progress in log occasionally
+                if attempts % 5 == 0:
+                    self._log(f"Found {len(unique_links)} potential targets...", "info")
+                
+                if len(unique_links) >= limit:
                     break
                     
                 attempts += 1
-                self._log(f"Scrolling... Found {count}/{limit} unique targets...", "info")
-            
-            # Convert back to list
-            final_links = list(unique_links.values())[:limit]
-            
-            self._log(f"Found {len(final_links)} unique targets. Extracting details...", "info")
-            
-            try:
-                import streamlit as st
-                progress_bar = st.progress(0)
-            except: progress_bar = None
-            
-            # Extract Details
-            results_data = []
-            seen_names = set()
+                
+            target_urls = list(unique_links.values())[:limit]
+            self._log(f"Phase 2: Extracting data from {len(target_urls)} targets...", "info")
 
-            for idx, link in enumerate(final_links):
+            # --- PHASE 2: VISIT & EXTRACT ---
+            import streamlit as st
+            progress_bar = st.progress(0)
+            
+            results_data = [] # Local collection
+            
+            for i, url in enumerate(target_urls):
                 try:
-                    # Scroll into view to ensure clickable
-                    self.driver.execute_script("arguments[0].scrollIntoView(true);", link)
-                    time.sleep(0.5)
+                    self.driver.get(url)
+                    time.sleep(1.5) # Wait for details
                     
-                    # Capture current header to check for changes
-                    try:
-                        old_header = self.driver.find_element(By.CSS_SELECTOR, "h1.DUwDvf").text
-                    except:
-                        old_header = ""
-
-                    # Click
-                    self.driver.execute_script("arguments[0].click();", link)
-                    time.sleep(1.5) # Wait for panel animation
-                        
-                    # Wait for header to potentially change if it was already there
-                    # Or just wait for presence
-                    try:
-                        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "h1.DUwDvf")))
-                    except:
-                        pass
-                    
-                    # Extract Data
+                    # Name
                     name = "Unknown"
+                    try:
+                        name = wait.until(EC.presence_of_element_located((By.TAG_NAME, "h1"))).text
+                    except: pass
+                    
+                    # Address, Phone, Website
+                    address = "N/A"
                     phone = "N/A"
                     website = "N/A"
-                    address = "N/A"
                     
-                    # 1. Name
                     try:
-                        name_el = self.driver.find_element(By.CSS_SELECTOR, "h1.DUwDvf")
-                        name = name_el.text
-                    except:
-                        try: name = self.driver.find_element(By.TAG_NAME, "h1").text
+                        address = self.driver.find_element(By.CSS_SELECTOR, "button[data-item-id='address']").get_attribute("aria-label").replace("Address: ", "")
+                    except: pass
+                    
+                    try:
+                        phone = self.driver.find_element(By.CSS_SELECTOR, "button[data-item-id^='phone']").get_attribute("aria-label").replace("Phone: ", "")
+                    except: pass
+                    
+                    try:
+                        website = self.driver.find_element(By.CSS_SELECTOR, "a[data-item-id='authority']").get_attribute("href")
+                    except: 
+                        try: website = self.driver.find_element(By.CSS_SELECTOR, "a[aria-label^='Website']").get_attribute("href")
                         except: pass
-                        
-                    if "Results" in name or name == "Unknown":
-                        continue
-                        
-                    # Dedup by name immediate check
-                    if name in seen_names:
-                        continue
-                    seen_names.add(name)
-
-                    # 2. Address
-                    try:
-                        addr_btn = self.driver.find_element(By.CSS_SELECTOR, "button[data-item-id='address']")
-                        address = addr_btn.get_attribute("aria-label").replace("Address: ", "")
-                    except: pass
                     
-                    # 3. Phone
-                    try:
-                        phone_btn = self.driver.find_element(By.CSS_SELECTOR, "button[data-item-id^='phone']")
-                        phone = phone_btn.get_attribute("aria-label").replace("Phone: ", "")
-                    except: pass
-                    
-                    # 4. Website
-                    # 4. Website
-                    try:
-                        # Strategy 1: Standard Authority Link
-                        web_btn = self.driver.find_element(By.CSS_SELECTOR, "a[data-item-id='authority']")
-                        website = web_btn.get_attribute("href")
-                    except:
-                        try:
-                            # Strategy 2: Aria Label (New Layout)
-                            web_btn = self.driver.find_element(By.CSS_SELECTOR, "a[aria-label^='Website']")
-                            website = web_btn.get_attribute("href")
-                        except:
-                            try:
-                                # Strategy 3: Text Content (Fallback)
-                                web_btn = self.driver.find_element(By.XPATH, "//a[.//div[text()='Website']]")
-                                website = web_btn.get_attribute("href")
-                            except:
-                                pass
-                    
+                    # Store
                     results_data.append({
                         "Name": name,
                         "Phone": phone,
-                        "Website": website if website and website != "N/A" else link.get_attribute("href"),
-                        "Email": "N/A", 
+                        "Website": website if website else url,
+                        "Email": "N/A",
                         "Address": address,
                         "Source": "Google Maps",
-                        "Notes": f"Extracted via '{keyword}'"
+                        "Notes": f"Extracted via {keyword}"
                     })
                     
-                    if progress_bar: progress_bar.progress((len(results_data))/limit)
-                    else: print(f"[{len(results_data)}/{limit}] Extracted {name}")
-                    
-                    if len(results_data) >= limit:
-                        break
+                    progress_bar.progress((i + 1) / len(target_urls))
                     
                 except Exception as e:
+                    self._log(f"Failed to extract {url}: {e}", "warning")
                     continue
+            
+            # --- EMAIL HUNTING ---
+            if results_data:
+                self._log(f"Hunting emails for {len(results_data)} leads...", "info")
+                import concurrent.futures
+                
+                def process_email(item):
+                    website = item.get("Website", "N/A")
+                    if website != "N/A" and "google.com/maps" not in website:
+                        item["Email"] = self._hunt_email(website)
+                    return item
 
-             # -------------------------------------------------
-            # TURBO MODE: Parallel Email Hunting
-            # -------------------------------------------------
-            self._log(f"Hunting emails for {len(results_data)} leads...", "info")
-            
-            import concurrent.futures
-            
-            # Helper for threading
-            def process_email(item):
-                website = item.get("Website", "N/A")
-                if website != "N/A" and "google.com/maps" not in website:
-                    item["Email"] = self._hunt_email(website)
-                else:
-                    item["Email"] = "N/A"
-                return item
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                leads = list(executor.map(process_email, results_data))
-            
-            return leads
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    leads = list(executor.map(process_email, results_data))
+                
+                return leads
+            else:
+                return []
             
         except Exception as e:
             self._log(f"Maps Scan error: {e}", "error")

@@ -1,5 +1,6 @@
+
 import os
-import google.generativeai as genai
+from google import genai
 import replicate
 import streamlit as st
 from dotenv import load_dotenv
@@ -10,10 +11,14 @@ class AIGhostwriter:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
         if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self.model = genai.GenerativeModel('gemini-flash-latest')
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+                self.model_id = "gemini-1.5-flash"
+            except Exception as e:
+                print(f"Gemini Init Error: {e}")
+                self.client = None
         else:
-            self.model = None
+            self.client = None
             
         self.business_context = self.load_business_context()
 
@@ -27,7 +32,7 @@ class AIGhostwriter:
 
     def generate_content(self, prompt, use_context=True):
         """Standard wrapper for generating text content."""
-        if not self.model:
+        if not self.client:
             return "Error: Gemini API Key missing."
             
         final_prompt = prompt
@@ -35,13 +40,16 @@ class AIGhostwriter:
             final_prompt = f"SYSTEM_CONTEXT:\n{self.business_context}\n\nUSER_REQUEST:\n{prompt}"
             
         try:
-            response = self.model.generate_content(final_prompt)
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=final_prompt
+            )
             return response.text.strip()
         except Exception as e:
             return f"AI Error: {str(e)}"
 
     def generate_icebreaker(self, name, bio, platform="Generic"):
-        if not self.model:
+        if not self.client:
             return "Error: Gemini API Key missing."
         
         prompt = f"""
@@ -53,7 +61,10 @@ class AIGhostwriter:
         Tone: Professional, sophisticated, intriguing. Not salesy.
         """
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=prompt
+            )
             return response.text.strip()
         except Exception as e:
             return f"AI Error: {str(e)}"
@@ -76,7 +87,7 @@ class AIGhostwriter:
         AI-powered lead scoring (0-100).
         Analyzes bio/headline to determine lead quality and business value.
         """
-        if not self.model:
+        if not self.client:
             # Fallback to heuristic if no API
             return self._heuristic_score(bio)
         
@@ -97,7 +108,10 @@ Scoring Criteria:
 Return ONLY a number between 0-100. No explanation."""
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_id,
+                contents=prompt
+            )
             score_text = response.text.strip()
             # Extract number from response
             import re

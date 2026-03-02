@@ -1,15 +1,85 @@
 import streamlit as st
 import os
 import time
+import json
 # Import VapiClient directly (Global Scope)
 from modules.vapi_client import VapiClient
+import modules.auth as auth
 
 def render_call_center_ui():
+    """
+    AI Dialer with Authentication, Minute Tracking, and Billing.
+    FREE = 2 min trial. PRO ($15) = 100 min.
+    """
+    
+    # ================================================================
+    # 0. AUTH GATEKEEPER — Must be logged in via Studio Auth
+    # ================================================================
+    if "user" not in st.session_state or not st.session_state.get("user"):
+        st.title("⚡ AI DIALER")
+        st.warning("🔒 Please log in via **Content Studio** first to use the AI Dialer.")
+        st.info("Go to sidebar → **3. Content Studio** → Login or Create Account.")
+        return
+    
+    user = st.session_state["user"]
+    user_id = user["id"]
+    tier = user.get("tier", "FREE")
+    
+    # ================================================================
+    # 1. HEADER: Usage Meter
+    # ================================================================
     st.title("⚡ TELEPHONY COMMAND")
     st.caption("Enterprise Cloud Voice • Low Latency • Vapi.ai Neural Engine")
+    
+    # Get call credits from DB
+    call_credits = auth.get_call_credits(user_id)
+    mins_used = call_credits["used"]
+    mins_limit = call_credits["limit"]
+    mins_remaining = call_credits["remaining"]
+    
+    # Usage Bar
+    h1, h2, h3 = st.columns([2, 1, 1])
+    with h1:
+        progress = min(1.0, mins_used / mins_limit) if mins_limit > 0 else 1.0
+        st.progress(progress)
+        st.caption(f"📞 **{mins_remaining} min** remaining of {mins_limit} min ({tier})")
+    with h2:
+        if tier == "FREE":
+            st.markdown(f"<div style='background:#1A1708;padding:8px 12px;border-radius:8px;text-align:center;color:#C5A55A;font-weight:600;'>FREE TRIAL<br><span style='font-size:0.8rem;color:#888;'>{mins_limit} min</span></div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div style='background:#064e3b;padding:8px 12px;border-radius:8px;text-align:center;color:#6ee7b7;font-weight:600;'>{tier} PLAN<br><span style='font-size:0.8rem;color:#888;'>{mins_limit} min/mo</span></div>", unsafe_allow_html=True)
+    with h3:
+        if tier == "FREE":
+            if st.button("⚡ Upgrade ($15/mo → 100 min)"):
+                st.session_state["user"]["tier"] = "PRICING_VIEW"
+                st.rerun()
+    
     st.markdown("---")
-
-    # --- CLOUD CONFIGURATION CHECK ---
+    
+    # ================================================================
+    # 2. MINUTE CHECK — Block if exhausted
+    # ================================================================
+    if mins_remaining <= 0:
+        st.error("❌ OUT OF MINUTES")
+        if tier == "FREE":
+            st.markdown("""
+                <div style='background:linear-gradient(135deg,#1A1708,#000);padding:2rem;border-radius:15px;border:1px solid #3D3520;text-align:center;margin:1rem 0;'>
+                    <h3 style='color:#C5A55A;'>Your 2-Minute Free Trial Has Ended</h3>
+                    <p style='color:#999;'>Upgrade to PRO for <b>100 minutes</b> of AI calling per month.</p>
+                    <h2 style='color:white;'>$15<span style='font-size:1rem;color:#666;'>/month</span></h2>
+                    <p style='color:#6ee7b7;'>✅ 100 AI call minutes &nbsp;•&nbsp; ✅ All voices &nbsp;•&nbsp; ✅ Transcripts</p>
+                </div>
+            """, unsafe_allow_html=True)
+            if st.button("⚡ Upgrade to PRO", type="primary", use_container_width=True):
+                st.session_state["user"]["tier"] = "PRICING_VIEW"
+                st.rerun()
+        else:
+            st.warning("You've used all your minutes this month. Your quota resets on the next billing cycle.")
+        return
+    
+    # ================================================================
+    # 3. CLOUD CONFIGURATION CHECK
+    # ================================================================
     api_key = os.getenv("VAPI_API_KEY", "")
     phone_id = os.getenv("VAPI_PHONE_ID", "")
     
@@ -20,7 +90,6 @@ def render_call_center_ui():
         return
 
     # --- MAIN INTERFACE ---
-    # Global 'client' variable, no ambiguity
     client = VapiClient(api_key)
     
     # --- TABS: DIALER vs DATABASE vs LEADS ---
@@ -28,7 +97,7 @@ def render_call_center_ui():
 
     # --- TAB 1: DIALER ---
     with tab_dialer:
-        st.success("✅ CLOUD VOICE ACTIVE (Global Reach)")
+        st.success(f"✅ CLOUD VOICE ACTIVE | ⏱️ {mins_remaining} min remaining")
         
         c1, c2 = st.columns([1, 1], gap="large")
 
@@ -39,12 +108,11 @@ def render_call_center_ui():
             target_ph = st.text_input("TARGET NUMBER", placeholder="+60123456789", help="E.164 Format advised")
             
             # --- AGENT COMMAND CENTER ---
-            import json
             
             # Load Agents
             AGENTS_FILE = "modules/agents.json"
             if not os.path.exists(AGENTS_FILE):
-                default_agents = {"Tahmid (Default)": "You are Tahmid..."}
+                default_agents = {"Tahmid (Default)": {"prompt": "You are Tahmid...", "voice_id": "ErXwobaYiN019PkySvjV", "first_message": "Hello?"}}
                 with open(AGENTS_FILE, "w") as f: json.dump(default_agents, f)
                 
             with open(AGENTS_FILE, "r") as f:
@@ -66,7 +134,6 @@ def render_call_center_ui():
                 edit_name = st.text_input("Name", value=selected_agent_name)
                 
                 # Voice Library with PREVIEW URLs
-                # Source: 11Labs Public Samples (Google Storage)
                 voice_library = {
                     "Rachel (Female, American)": {
                         "id": "21m00Tcm4TlvDq8ikWAM", 
@@ -100,7 +167,7 @@ def render_call_center_ui():
                 
                 # Setup
                 current_voice_id = agent_data.get("voice_id", "21m00Tcm4TlvDq8ikWAM")
-                if current_voice_id == "burt": current_voice_id = "ErXwobaYiN019PkySvjV" # Migrating legacy
+                if current_voice_id == "burt": current_voice_id = "ErXwobaYiN019PkySvjV"
                 
                 # Find Label for ID
                 current_label = next((k for k, v in voice_library.items() if v["id"] == current_voice_id), "Rachel (Female, American)")
@@ -142,32 +209,37 @@ def render_call_center_ui():
                      if not target_ph:
                          st.error("Enter a Target Number.")
                      else:
+                         # ============================================
+                         # PRE-CALL CHECK: Do they have minutes?
+                         # ============================================
+                         if not auth.can_make_call(user_id):
+                             st.error("❌ Out of minutes! Upgrade to continue.")
+                             st.stop()
+                         
                          # Smart Formatting (E.164)
                          raw = target_ph.strip().replace(" ", "").replace("-", "")
                          formatted_ph = raw
                          
-                         # If it already starts with +, it's probably correct E.164
                          if raw.startswith("+"):
                              formatted_ph = raw
-                         # If it starts with country code (880, 60, 1, etc.), add +
-                         elif raw.startswith("880"):  # Bangladesh
+                         elif raw.startswith("880"):
                              formatted_ph = "+" + raw
-                         elif raw.startswith("60"):  # Malaysia
+                         elif raw.startswith("60"):
                              formatted_ph = "+" + raw
-                         elif raw.startswith("1") and len(raw) == 11:  # USA/Canada
+                         elif raw.startswith("1") and len(raw) == 11:
                              formatted_ph = "+" + raw
-                         # If it starts with 0, assume Malaysian mobile (legacy behavior)
                          elif raw.startswith("0"):
                              formatted_ph = "+60" + raw[1:]
-                         # Otherwise, warn the user to use E.164 format
                          else:
-                             st.warning(f"⚠️ Please use E.164 format: +[country code][number]. Example: +8801712345678 (Bangladesh) or +60123456789 (Malaysia)")
-                             formatted_ph = raw  # Send as-is and let Vapi reject it 
-                             
+                             st.warning(f"⚠️ Please use E.164 format: +[country code][number].")
+                             formatted_ph = raw
+                              
                          st.caption(f"Dialing: {formatted_ph}...")
                          
+                         # Record start time for duration tracking
+                         call_start_time = time.time()
+                         
                          with st.spinner("Establishing Neural Uplink..."):
-                             # Pass ALL parameters to Client
                              res = client.start_call(
                                  formatted_ph, 
                                  prompt_override=agent_data.get("prompt"), 
@@ -182,14 +254,36 @@ def render_call_center_ui():
                                  st.success("✅ SIGNAL LOCKED. CALLING...")
                                  st.toast("AI Agent Dispatched!", icon="🛰️")
                                  
+                                 # Store call ID for tracking
+                                 st.session_state["active_call_id"] = res.get("id")
+                                 st.session_state["call_start_time"] = call_start_time
+                                 
                                  # Display Call Info
                                  with st.expander("📝 CONNECTION LOG", expanded=True):
                                      st.json(res)
                                      st.caption(f"Call ID: {res.get('id')}")
-    
+                                     st.info("⏱️ Minutes will be deducted when the call ends. Click 'Sync Minutes' to update.")
+        
+            # ============================================
+            # POST-CALL: Sync Minutes Button
+            # ============================================
+            st.markdown("---")
+            if st.button("🔄 Sync Minutes (After Call Ends)", use_container_width=True):
+                with st.spinner("Fetching call duration from Vapi..."):
+                    _sync_call_minutes(client, user_id)
+                    st.rerun()
+
         with c2:
             st.subheader("📊 LIVE TELEMETRY")
             
+            # --- CACHED DATA FETCHING ---
+            @st.cache_data(ttl=30, show_spinner=False)
+            def get_cached_history():
+                try:
+                    return client.get_calls(limit=10)
+                except:
+                    return []
+
             # Call History / Logs
             col_h1, col_h2 = st.columns([2, 1])
             col_h1.info("Fetching recent transmissions...")
@@ -197,23 +291,23 @@ def render_call_center_ui():
             if col_h2.button("💾 SYNC DB"):
                 with st.spinner("Downloading Transcripts..."):
                     from modules.call_logger import CallLogger
-                    # Fetch deeper history for logging
                     full_history = client.get_calls(limit=50)
                     if full_history and "error" not in full_history:
                         msg = CallLogger.save_logs(full_history)
                         st.success(msg)
+                        get_cached_history.clear() # Clear cache on sync
                     else:
                         st.error("Failed to fetch logs.")
             
             try:
-                history = client.get_calls(limit=10)
+                history = get_cached_history()
                 if history:
                      for call in history:
-                         # Parse Vapi Call Object
                          status = call.get('status', 'unknown')
                          cost = call.get('cost', 0)
                          dest = call.get('customer', {}).get('number', 'Unknown')
                          ended_reason = call.get('endedReason', '-')
+                         duration = call.get('duration', 0) # seconds
                          
                          icon = "🟢" if status == "in-progress" else "🔴" if status == "ended" else "🟡"
                          
@@ -226,7 +320,8 @@ def render_call_center_ui():
                                  st.markdown(f"{icon} {status.upper()}")
                              
                              if status == "ended":
-                                 st.caption(f"Reason: {ended_reason} | Cost: ${cost:.4f}")
+                                 dur_min = round(duration / 60, 1) if duration else 0
+                                 st.caption(f"Duration: {dur_min} min | Reason: {ended_reason} | Cost: ${cost:.4f}")
                 else:
                     st.caption("No recent signals found.")
             except Exception as e:
@@ -258,31 +353,44 @@ def render_call_center_ui():
             selected_lead = st.selectbox("Select Lead to Call", lead_names)
             
             if st.button("📞 CALL SELECTED LEAD", type="primary"):
-                # Extract Phone from string
-                phone_to_call = selected_lead.split("(")[-1].strip(")")
-                st.info(f"Initiating call to {phone_to_call}...")
-                
-                # Trigger Call
-                res = client.start_call(
-                    phone_to_call, 
-                    prompt_override=known_agents[selected_agent_name]["prompt"], # Use active agent settings
-                    first_message=known_agents[selected_agent_name]["first_message"],
-                    voice_id=known_agents[selected_agent_name]["voice_id"],
-                    phone_id=phone_id
-                )
-                if "error" in res:
-                    st.error(res["error"])
+                # Pre-call minute check
+                if not auth.can_make_call(user_id):
+                    st.error("❌ Out of minutes! Upgrade to continue.")
                 else:
-                    st.success("Connected!")
-                    time.sleep(1) # UX Pause
+                    phone_to_call = selected_lead.split("(")[-1].strip(")")
+                    st.info(f"Initiating call to {phone_to_call}...")
+                    
+                    res = client.start_call(
+                        phone_to_call, 
+                        prompt_override=known_agents[selected_agent_name].get("prompt") if isinstance(known_agents[selected_agent_name], dict) else known_agents[selected_agent_name],
+                        first_message=known_agents[selected_agent_name].get("first_message", "Hello?") if isinstance(known_agents[selected_agent_name], dict) else "Hello?",
+                        voice_id=known_agents[selected_agent_name].get("voice_id", "burt") if isinstance(known_agents[selected_agent_name], dict) else "burt",
+                        phone_id=phone_id
+                    )
+                    if "error" in res:
+                        st.error(res["error"])
+                    else:
+                        st.success("Connected!")
+                        st.session_state["active_call_id"] = res.get("id")
+                        st.session_state["call_start_time"] = time.time()
+                        time.sleep(1)
         else:
             st.warning("No `leads.csv` found. Create one with columns: Name, Phone.")
 
-    # --- TAB 3: DATABASE VIEW (Below) ---
-
+    # --- TAB 3: DATABASE VIEW ---
     with tab_db:
         st.subheader("🗄️ CALL TRANSCRIPT DATABASE")
         st.caption("View and Analyze previous interactions.")
+        
+        # Usage Summary
+        st.markdown(f"""
+            <div style='background:#111;padding:1rem;border-radius:10px;border:1px solid #333;margin-bottom:1rem;'>
+                <b style='color:#C5A55A;'>📊 This Month's Usage</b><br>
+                <span style='color:#eee;font-size:1.5rem;font-weight:700;'>{mins_used} min</span>
+                <span style='color:#666;'> / {mins_limit} min</span>
+                <br><span style='color:#6ee7b7;'>💰 Your cost: ~${mins_used * 0.08:.2f}</span>
+            </div>
+        """, unsafe_allow_html=True)
         
         log_file = "call_logs.xlsx"
         if os.path.exists(log_file):
@@ -306,3 +414,57 @@ def render_call_center_ui():
                 st.text_area("Full Transcript", value=row.get('Transcript', 'No Transcript Available'), height=400)
         else:
             st.warning("No Database Found. Go to the **Dialer** tab and click **'💾 SYNC DB'** to create it.")
+
+
+def _sync_call_minutes(client, user_id):
+    """
+    Fetches recent calls from Vapi and deducts actual duration from user's balance.
+    Only deducts for calls not yet tracked (uses session tracking).
+    """
+    try:
+        history = client.get_calls(limit=20)
+        if not history:
+            st.info("No calls found.")
+            return
+        
+        # Track which calls we've already deducted for
+        if "deducted_call_ids" not in st.session_state:
+            st.session_state["deducted_call_ids"] = set()
+        
+        total_new_minutes = 0
+        new_calls = 0
+        
+        for call in history:
+            call_id = call.get("id")
+            status = call.get("status")
+            duration_seconds = 0
+            
+            # Get duration from Vapi response
+            if "startedAt" in call and "endedAt" in call:
+                try:
+                    from datetime import datetime
+                    started = datetime.fromisoformat(call["startedAt"].replace("Z", "+00:00"))
+                    ended = datetime.fromisoformat(call["endedAt"].replace("Z", "+00:00"))
+                    duration_seconds = (ended - started).total_seconds()
+                except:
+                    pass
+            
+            # Fallback: use 'duration' field if available
+            if duration_seconds == 0:
+                duration_seconds = call.get("duration", 0)
+            
+            # Only deduct for ended calls we haven't tracked yet
+            if call_id and call_id not in st.session_state["deducted_call_ids"] and status == "ended" and duration_seconds > 0:
+                minutes = round(duration_seconds / 60, 2)
+                total_new_minutes += minutes
+                new_calls += 1
+                st.session_state["deducted_call_ids"].add(call_id)
+        
+        if total_new_minutes > 0:
+            auth.deduct_call_minutes(user_id, total_new_minutes)
+            st.success(f"✅ Synced {new_calls} call(s). Deducted {round(total_new_minutes, 1)} minutes.")
+        else:
+            st.info("No new completed calls to sync.")
+            
+    except Exception as e:
+        st.error(f"Sync Error: {e}")

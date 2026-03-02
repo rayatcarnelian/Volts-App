@@ -13,10 +13,11 @@ from dotenv import load_dotenv
 
 # --- COMPATIBILITY PATCH ---
 import sys
-# SHIM: Redirect moviepy.editor to moviepy (v2.0 compatibility)
+# SHIM: Redirect moviepy -> moviepy.editor (v1.x compatibility)
+# Code uses v2-style `from moviepy import X`, but v1.x has classes in moviepy.editor
 try:
-    import moviepy
-    sys.modules["moviepy.editor"] = moviepy
+    import moviepy.editor as _moviepy_editor
+    sys.modules["moviepy"] = _moviepy_editor
 except ImportError:
     pass
 
@@ -44,24 +45,174 @@ from modules.architect import VoltsArchitect
 from modules.voice_studio import VoiceStudio
 from modules.outreach_voice import CallCenter
 from modules import ui_components as uic
-from modules import database as db
+importlib.reload(uic)
+from modules import database_v2_schema as db
+importlib.reload(db)
 
 load_dotenv()
 
 # --- PAGE CONFIG ---
 st.set_page_config(
-    page_title="VOLTS | COMMAND CENTER",
+    page_title="VOLTS | Growth Platform",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# --- INIT ---
-uic.apply_custom_css()
-uic.init_terminal()
+# --- PAYMENT VERIFICATION ---
+import modules.auth as auth_module
+from modules.payments import gateway
+
+# Check for Stripe callback
+if "session_id" in st.query_params:
+    session_id = st.query_params["session_id"]
+    with st.spinner("Verifying secure payment..."):
+        is_valid, email, tier = gateway.verify_session(session_id)
+        
+        if is_valid and email:
+            if auth_module.upgrade_user_by_email(email, tier):
+                st.success(f"PAYMENT SUCCESS! Account upgraded to {tier}. Please log in again if needed.")
+                st.balloons()
+            else:
+                st.error("Payment received, but user not found. Please contact support.")
+        else:
+            # st.error("Invalid or expired payment session.")
+            pass
+            
+    # Clear param to prevent loop
+    st.query_params.clear()
+
+# --- RELIABILITY & BACKUP ---
+try:
+    import sentry_sdk
+    if os.getenv("SENTRY_DSN"):
+        sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=1.0)
+except ImportError:
+    pass
+
+try:
+    from modules.backup import perform_backup
+    perform_backup()
+except Exception as e:
+    print(f"Backup failed: {e}")
+
+# --- INIT DB (Must run before auth) ---
 db.init_db()
 
-uic.log_message("SYSTEM INITIALIZED. DASHBOARD ACTIVE.")
+# --- GLOBAL AUTH GATE ---
+import modules.auth as auth_module
+
+if "user" not in st.session_state:
+    st.session_state["user"] = None
+
+if not st.session_state["user"]:
+    # Show Landing Page + Login
+    uic.apply_custom_css()
+    
+    from modules.landing_page import render_landing_page, render_features_grid
+    
+    # Render Hero and get the login container
+    auth_container = render_landing_page()
+    
+    with auth_container:
+        tab_login, tab_signup = st.tabs(["🔐 Login", "📝 Sign Up"])
+        
+        with tab_login:
+            email = st.text_input("Email", key="global_login_email")
+            password = st.text_input("Password", type="password", key="global_login_pass")
+            if st.button("Login", type="primary", use_container_width=True):
+                if email and password:
+                    user_data = auth_module.login(email, password)
+                    if user_data:
+                        st.session_state["user"] = user_data
+                        st.success("Login successful!")
+                        st.toast(f"Welcome back, {email.split('@')[0]}!", icon="⚡")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error("Invalid email or password.")
+                else:
+                    st.error("Please enter email and password.")
+            
+            # --- Password Reset ---
+            st.markdown("---")
+            with st.expander("Forgot Password?"):
+                reset_email = st.text_input("Enter your account email", key="reset_email")
+                if st.button("Send Reset Code"):
+                    if not reset_email:
+                        st.error("Please enter email.")
+                    else:
+                        success, token = auth_module.generate_reset_token(reset_email)
+                        if success:
+                            # Send Email (Lazy import to avoid circular dependency if any)
+                            from modules.outreach_email import EmailBlaster
+                            try:
+                                blaster = EmailBlaster()
+                                if blaster.connect():
+                                    subject = "VOLTS Password Reset Code"
+                                    body = f"Your reset code is: <b>{token}</b><br>Expires in 15 minutes."
+                                    sent, msg = blaster.send_single_email(reset_email, subject, body)
+                                    blaster.close()
+                                    if sent:
+                                        st.success(f"Code sent to {reset_email}!")
+                                        st.session_state["reset_email_sent"] = reset_email
+                                    else:
+                                        st.error(f"Failed to send email: {msg}")
+                                else:
+                                    st.error("Email service unavailable. Check .env settings.")
+                            except Exception as e:
+                                st.error(f"Email Error: {e}")
+                        else:
+                            st.error(token) # Error msg
+                
+                if "reset_email_sent" in st.session_state:
+                    st.divider()
+                    st.info(f"Resetting for: {st.session_state['reset_email_sent']}")
+                    reset_code = st.text_input("Enter 6-digit Code", key="reset_code")
+                    new_pass_reset = st.text_input("New Password", type="password", key="reset_new_pass")
+                    
+                    if st.button("Reset Password", type="secondary"):
+                        valid, msg = auth_module.reset_password_with_token(
+                            st.session_state["reset_email_sent"], 
+                            reset_code, 
+                            new_pass_reset
+                        )
+                        if valid:
+                            st.success("Password reset! You can now login.")
+                            del st.session_state["reset_email_sent"]
+                        else:
+                            st.error(msg)
+        
+        with tab_signup:
+            new_email = st.text_input("Email", key="global_signup_email")
+            new_pass = st.text_input("Password", type="password", key="global_signup_pass")
+            confirm_pass = st.text_input("Confirm Password", type="password", key="global_signup_confirm")
+            if st.button("Create Account", type="primary", use_container_width=True):
+                if not new_email or not new_pass:
+                    st.error("Please fill in all fields.")
+                elif new_pass != confirm_pass:
+                    st.error("Passwords do not match.")
+                else:
+                    success, msg = auth_module.signup(new_email, new_pass)
+                    if success:
+                        st.success("Account created! Logging in...")
+                        user_data = auth_module.login(new_email, new_pass)
+                        st.session_state["user"] = user_data
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(f"Error: {msg}")
+    
+    # Show Features Grid below the fold
+    render_features_grid()
+    st.stop()
+    
+# --- USER IS LOGGED IN ---
+current_user = st.session_state["user"]
+user_tier = current_user.get("tier", "FREE")
+
+# --- APPLY GLOBAL CSS THEME ---
+uic.apply_custom_css()
 
 # --- SIDEBAR NAVIGATION ---
 with st.sidebar:
@@ -72,132 +223,58 @@ with st.sidebar:
         
     st.caption("ULTIMATE ACQUISITION SYSTEM")
     
-    # Custom Menu with Shadcn maybe? sticking to radio for nav is safe for distinct pages
-    page = st.radio("MODULE SELECTOR", [
-        "1. THE HUNTER",
-        "2. THE BRAIN",
-        "3. THE STUDIO",
-        "4. CALL CENTER",
-        "5. OUTREACH",
-        "6. ANALYTICS",
-        "7. SETTINGS",
-        "8. SOVEREIGN MODE"
-    ], label_visibility="collapsed")
+    # Build menu based on tier
+    menu_items = [
+        "🔍 Lead Search",
+        "📊 Pipeline / CRM",
+        "📸 Content Studio",
+        "🛠️ Production Studio",
+        "📞 AI Dialer",
+    ]
+    
+    # Settings is for all users; Admin is for ADMIN only
+    menu_items.append("⚙️ Settings")
+    if user_tier == "ADMIN":
+        menu_items.append("🛡️ Admin")
+    
+    page = st.radio("NAVIGATION", menu_items, label_visibility="collapsed")
     
     st.markdown("---")
     
-    # Status Checks using Metric Cards
-    cols = st.columns(2)
-    with cols[0]:
-        ui.metric_card(title="GEMINI", content="ON" if os.getenv("GEMINI_API_KEY") else "OFF", description="AI Text", key="status_gemini")
-    with cols[1]:
-        ui.metric_card(title="REPLICATE", content="ON" if os.getenv("REPLICATE_API_TOKEN") else "OFF", description="Vision", key="status_rep")
+    # User Info
+    st.caption(f"👤 {current_user.get('email', 'User')}")
+    st.caption(f"📋 {user_tier} Plan")
+    if st.button("🚪 Logout", use_container_width=True):
+        st.session_state["user"] = None
+        st.rerun()
     
-    cols2 = st.columns(2)
-    with cols2[0]:
-        ui.metric_card(title="11LABS", content="ON" if os.getenv("ELEVENLABS_API_KEY") else "OFF", description="Voice", key="status_11")
-    with cols2[1]:
-        ui.metric_card(title="TWILIO", content="ON" if os.getenv("TWILIO_SID") else "OFF", description="Call", key="status_twilio")
+    # System Health (Admin Only)
+    if user_tier == "ADMIN":
+        st.markdown("---")
+        st.markdown("### System Health")
+        uic.card_system_status(title="GEMINI AI", status="Active" if os.getenv("GEMINI_API_KEY") else "Inactive", description="Reasoning Engine", key="status_gemini")
+        uic.card_system_status(title="REPLICATE", status="Active" if os.getenv("REPLICATE_API_TOKEN") else "Inactive", description="Vision Models", key="status_rep")
+        uic.card_system_status(title="11LABS", status="Active" if os.getenv("ELEVENLABS_API_KEY") else "Inactive", description="Voice Synthesis", key="status_11")
+        uic.card_system_status(title="TWILIO", status="Active" if os.getenv("TWILIO_SID") else "Inactive", description="Global Telephony", key="status_twilio")
 
 
-# --- MODULE 1: THE HUNTER ---
-if "1. THE HUNTER" in page:
-    st.title("THE HUNTER")
-    st.markdown("### `DEPLOY AUTOMATED AGENTS TO HARVEST LEADS`")
+# --- MODULE 1: LEAD SEARCH ---
+if "Lead Search" in page:
+    st.title("Lead Search")
+    st.caption("Find and enrich high-value prospects from multiple sources.")
     st.markdown("---")
     
     # Hunter Interface
-    chosen_tab = ui.tabs(options=["INSTAGRAM", "GOOGLE MAPS", "LINKEDIN (NEW)", "TELEGRAM", "FACEBOOK", "X HUNTER", "IPROPERTY", "PROP GURU"], default_value="LINKEDIN (NEW)", key="hunter_tabs")
+    # Hunter Interface
+    # Prioritizing Stable Scrapers for SaaS Launch
+    chosen_tab = ui.tabs(options=["GOOGLE MAPS", "LINKEDIN X-RAY", "FACEBOOK", "🔬 LABS"], default_value="GOOGLE MAPS", key="hunter_tabs")
     
     st.write("") # Spacer
     
-    # Container for the active hunter to give it a "Terminal Window" feel
+    # Container for the active hunter
     with st.container(border=True):
-        if chosen_tab == "INSTAGRAM":
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
-            
-            with tab_control:
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                    st.subheader("/// INSTAGRAM_AGENT")
-                    tag = st.text_input("TARGET HASHTAG", "#InteriorDesignKL", help="Enter a hashtag without spaces")
-                    
-                    # Manual Credentials Expander (Hidden by default)
-                    with st.expander("MANUAL OVERRIDE CREDENTIALS", expanded=False):
-                        manual_user = st.text_input("Username (Optional override)", key="man_user")
-                        manual_pass = st.text_input("Password (Optional override)", type="password", key="man_pass")
-
-                    st.write("")
-                    safe_mode = st.checkbox("CRASH-PROOF MODE (Direct API)", value=True, help="Uses direct server connection. No browser window. Cannot crash.")
-                    
-                    scrape_limit = st.slider("Target Leads Amount", min_value=1, max_value=100, value=10, help="Higher values take longer (approx 3s per lead due to enrichment).")
-
-                    if st.button("Initialize Sequence", key="btn_insta"):
-                        uic.log_message(f"Deploying Instagram Hunter for {tag}...")
-                        
-                        # 1. Start Campaign
-                        import modules.database as db
-                        campaign_id = db.create_campaign("Instagram", tag)
-                        
-                        with st.spinner(">> EXEC: Scraping Instagram..."):
-                            if safe_mode:
-                                # SAFE IMPORT: API MODE (No Browser)
-                                # Bypasses Chrome binary completely
-                                from modules.scraper_insta_api import InstagramHunterAPI
-                                import modules.scraper_insta_api
-                                importlib.reload(modules.scraper_insta_api)
-                                
-                                hunter = InstagramHunterAPI()
-                                leads = hunter.scrape_hashtag(tag, max_posts=scrape_limit, username=manual_user, password=manual_pass)
-                            else:
-                                # RISKY IMPORT: Loads undetected-chromedriver
-                                from modules.scraper_insta import InstagramHunter
-                                # Force reload
-                                import modules.scraper_insta
-                                importlib.reload(modules.scraper_insta)
-                                
-                                hunter = InstagramHunter()
-                                leads = hunter.scrape_hashtag(tag, username=manual_user, password=manual_pass, use_safe_mode=False)
-                                
-                            hunter.close()
-                            
-                            if leads:
-                                st.success(f"Successfully extracted {len(leads)} raw targets.")
-                                uic.log_message(f"Pipeline: {len(leads)} leads acquired.")
-                                
-                                # Save to Database with Campaign ID
-                                count = LeadManager.add_lead(leads, campaign_id=campaign_id)
-                                
-                                # Update Campaign Metadata
-                                if campaign_id:
-                                    db.update_campaign_count(campaign_id, count)
-                                    
-                                if count > 0:
-                                    st.balloons()
-                                    st.success(f"Creating Digital Twins... {count} Leads Added to CRM.")
-                                else:
-                                    st.warning("leads acquired but duplicates excluded.")
-                            else:
-                                st.error("FAILURE: 0 TARGETS ACQUIRED. Check Login or Strategy.")
-                            
-                with c2:
-                    st.markdown("#### STATUS_MONITOR")
-                    uic.animation_radar()
-                    st.caption("Listening for signal...")
-            
-            with tab_db:
-                st.subheader("📁 INSTAGRAM DATABASE")
-                import modules.database as db
-                df_insta = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'Instagram%' ORDER BY id DESC", db.get_connection())
-                if not df_insta.empty:
-                    st.dataframe(df_insta, use_container_width=True, hide_index=True)
-                    csv = df_insta.to_csv(index=False).encode('utf-8')
-                    st.download_button("📥 DOWNLOAD INSTAGRAM DATA", data=csv, file_name="instagram_leads.csv", mime="text/csv", type="primary", key="dl_insta")
-                else:
-                    st.info("Database Empty.")
-                
-        elif chosen_tab == "GOOGLE MAPS":
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
+        if chosen_tab == "GOOGLE MAPS":
+            tab_control, tab_db = st.tabs(["🚀 Search", "🗄️ Results"])
             
             with tab_control:
                 c1, c2 = st.columns([2, 1])
@@ -213,68 +290,73 @@ if "1. THE HUNTER" in page:
                     target_limit = st.slider("TARGET LEADS", min_value=5, max_value=100, value=20, step=5, help="How many leads to extract? Higher numbers take longer.")
                     
                     st.write("")
-                    if st.button("Initialize Sequence", key="btn_maps"):
-                        uic.log_message(f"Deploying Maps Hunter for {keyword} ({target_limit} targets)...")
-                        with st.spinner(f">> EXEC: Scanning Sector ({engine_map[browser_choice]})..."):
-                            from modules.scraper_maps import MapsHunter
-                            hunter = MapsHunter(browser_type=engine_map[browser_choice])
-                            leads = hunter.scan(keyword, limit=target_limit)
-                            hunter.close()
-                            if leads:
-                                count = LeadManager.add_lead(leads)
-                                uic.log_message(f"Scan Complete. {count} entities found.")
-                                st.success(f"SUCCESS: {count} TARGETS ACQUIRED.")
-                            else:
-                                st.warning("SECTOR CLEAR. NO TARGETS.")
+                    
+                    # Stop button state
+                    if "maps_scanning" not in st.session_state:
+                        st.session_state.maps_scanning = False
+                    
+                    btn_col1, btn_col2 = st.columns([1, 1])
+                    with btn_col1:
+                        start_scan = st.button("▶ Start Scan", key="btn_maps", type="primary", use_container_width=True, disabled=st.session_state.maps_scanning)
+                    with btn_col2:
+                        stop_scan = st.button("⏹ Stop", key="btn_maps_stop", use_container_width=True, disabled=not st.session_state.maps_scanning)
+                    
+                    if stop_scan:
+                        st.session_state.maps_scanning = False
+                        st.toast("Scan stopped by user.", icon="⏹")
+                    
+                    if start_scan:
+                        st.session_state.maps_scanning = True
+                        uic.log_message(f"Starting Maps Search for {keyword}...")
+                        
+                        with st.status(f"🔍 Scanning for '{keyword}'...", expanded=True) as status:
+                            try:
+                                st.write("⚙️ Initializing browser engine...")
+                                from modules.scraper_maps import MapsHunter
+                                hunter = MapsHunter(browser_type=engine_map[browser_choice])
+                                
+                                st.write(f"🌐 Opening Google Maps (Engine: {engine_map[browser_choice]})...")
+                                leads = hunter.scan(keyword, limit=target_limit)
+                                hunter.close()
+                                
+                                st.session_state.maps_scanning = False
+                                
+                                if leads:
+                                    st.write(f"💾 Saving {len(leads)} leads to database...")
+                                    count = LeadManager.add_lead(leads)
+                                    uic.log_message(f"Scan Complete. {count} found.")
+                                    status.update(label=f"✅ Complete — {count} leads added!", state="complete", expanded=False)
+                                    st.balloons()
+                                else:
+                                    status.update(label="⚠️ No results found", state="error", expanded=False)
+                            except Exception as e:
+                                st.session_state.maps_scanning = False
+                                hunter_ref = locals().get('hunter')
+                                if hunter_ref:
+                                    try: hunter_ref.close()
+                                    except: pass
+                                status.update(label=f"❌ Error: {str(e)[:80]}", state="error", expanded=True)
+                                st.error(f"Scan failed: {e}")
+
                 with c2:
-                    st.markdown("#### STATUS_MONITOR")
-                    uic.animation_radar()
+                    if st.session_state.get("maps_scanning"):
+                        st.warning("⏳ Scan in progress...")
+                    else:
+                        st.info("Status: Ready")
 
             with tab_db:
                 st.subheader("📁 GOOGLE MAPS DATABASE")
-                import modules.database as db
-                df_maps = pd.read_sql("SELECT * FROM leads WHERE source = 'Google Maps' ORDER BY id DESC", db.get_connection())
-                if not df_maps.empty:
-                    st.dataframe(df_maps, use_container_width=True, hide_index=True)
-                    csv = df_maps.to_csv(index=False).encode('utf-8')
-                    st.download_button("📥 DOWNLOAD MAPS DATA", data=csv, file_name="maps_leads.csv", mime="text/csv", type="primary", key="dl_maps")
-                else:
-                    st.info("Database Empty.")
-
-        elif chosen_tab == "TELEGRAM":
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
-            
-            with tab_control:
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                    st.subheader("/// TELEGRAM_INFILTRATOR")
-                    link = st.text_input("GROUP INVITE LINK", "https://t.me/example")
-                    
-                    st.write("")
-                    if st.button("Initialize Sequence", key="btn_tele"):
-                        uic.log_message(f"Infiltrating: {link}")
-                        with st.spinner(">> EXEC: Bypassing Security..."):
-                             # Blocking call for async
-                             from modules.scraper_telegram import TelegramHunter
-                             hunter = TelegramHunter()
-                             leads = asyncio.run(hunter.scrape_members(link))
-                             count = LeadManager.add_lead(leads)
-                             uic.log_message(f"Infiltration successful. Extracted {count}.")
-                             st.success(f"SUCCESS: {count} TARGETS ACQUIRED.")
-                with c2:
-                    st.markdown("#### STATUS_MONITOR")
-                    uic.animation_radar()
-            
-            with tab_db:
-                st.subheader("📁 TELEGRAM DATABASE")
-                import modules.database as db
-                # Assuming generic leads or specific if available, but for now generic with source filter if applicable
-                # Actually checking scraper_telegram.py would be best, but let's assume standard 'Telegram' source
-                df_tele = pd.read_sql("SELECT * FROM leads WHERE source = 'Telegram' OR source LIKE 'Telegram%' ORDER BY id DESC", db.get_connection())
-                if not df_tele.empty:
-                    st.dataframe(df_tele, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No Telegram data found.")
+                try:
+                    import modules.database as db
+                    df_maps = pd.read_sql("SELECT * FROM leads WHERE source = 'Google Maps' ORDER BY id DESC", db.get_connection())
+                    if not df_maps.empty:
+                        st.dataframe(df_maps, use_container_width=True, hide_index=True)
+                        csv = df_maps.to_csv(index=False).encode('utf-8')
+                        st.download_button("📥 DOWNLOAD MAPS DATA", data=csv, file_name="maps_leads.csv", mime="text/csv", type="primary", key="dl_maps")
+                    else:
+                        st.info("Database Empty. Run a scan to populate.")
+                except Exception as e:
+                    st.error(f"Database error: {e}")
                 
         elif chosen_tab == "FACEBOOK":
             tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
@@ -304,18 +386,27 @@ if "1. THE HUNTER" in page:
                         st.info("Headless Mode: ON. Browser will run silently.")
                         if st.button("Initialize Sequence", key="btn_fb_group"):
                              uic.log_message(f"Deploying Facebook Hunter on {url}")
-                             with st.spinner(">> EXEC: Scraping Feed..."):
-                                 from modules.scraper_fb import FacebookHunter
-                                 hunter = FacebookHunter()
-                                 # Use wildcard '*' to capture ALL posts for now to debug
-                                 count = hunter.hunt_group(url, ["*"], 3)
-                                 hunter.close()
-                                 if count: 
-                                     st.success(f"EXTRACTED {count} LEADS")
-                                     # Notify User
-                                     from modules.notifications import SystemAlert
-                                     SystemAlert().send_alert("FB Group Scraper", f"Found {count} leads in {url}")
-                                 else: st.warning("NO TARGETS FOUND")
+                             with st.status("🚀 Launching Facebook Group Hunter...", expanded=True) as status:
+                                 try:
+                                     from modules.scraper_fb import FacebookHunter
+                                     hunter = FacebookHunter()
+                                     # Use wildcard '*' to capture ALL posts for now to debug
+                                     st.write(f"Scanning feed for {url}...")
+                                     count = hunter.hunt_group(url, ["*"], 3)
+                                     hunter.close()
+                                     
+                                     if count: 
+                                         status.update(label=f"✅ Success: Extracted {count} leads", state="complete", expanded=False)
+                                         st.success(f"EXTRACTED {count} LEADS")
+                                         # Notify User
+                                         from modules.notifications import SystemAlert
+                                         SystemAlert().send_alert("FB Group Scraper", f"Found {count} leads in {url}")
+                                     else: 
+                                         status.update(label="⚠️ No targets found", state="error", expanded=False)
+                                         st.warning("NO TARGETS FOUND")
+                                 except Exception as e:
+                                     status.update(label="❌ Scraper Failed", state="error", expanded=True)
+                                     st.error(f"Error: {e}")
 
                     elif fb_mode == "MARKETPLACE":
                         with st.expander("📖 HOW TO USE MARKETPLACE SCRAPER"):
@@ -376,7 +467,7 @@ if "1. THE HUNTER" in page:
                                          st.error("FAILED TO POST")
                 with c2:
                     st.markdown("#### STATUS_MONITOR")
-                    uic.animation_radar()
+                    uic.card_system_status("FACEBOOK", "Active", "Graph API / Scraper", "fb_stat")
             
             with tab_db:
                 st.subheader("📁 FACEBOOK DATABASE")
@@ -411,163 +502,319 @@ if "1. THE HUNTER" in page:
                     )
                 else:
                     st.info("No Facebook data found.")
+
+        elif chosen_tab == "🔬 LABS":
+            st.title("Experimental Labs")
+            st.caption("Beta features and highly experimental scrapers. Use with caution.")
+            
+            lab_tab = ui.tabs(options=["INSTAGRAM", "TELEGRAM", "X / TWITTER", "IPROPERTY", "PROP GURU"], default_value="INSTAGRAM", key="lab_tabs")
+            
+            if lab_tab == "INSTAGRAM":
+                tab_control, tab_db = st.tabs(["🚀 Search", "🗄️ Results"])
                 
-        elif chosen_tab == "X HUNTER":
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
+                with tab_control:
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        st.subheader("Instagram Explorer")
+                        tag = st.text_input("Target Hashtag", "#InteriorDesignKL", help="Enter a hashtag without spaces")
+                        
+                        # Manual Credentials Expander (Hidden by default)
+                        with st.expander("Advanced Authentication", expanded=False):
+                            manual_user = st.text_input("Username (Optional override)", key="man_user")
+                            manual_pass = st.text_input("Password (Optional override)", type="password", key="man_pass")
+
+                        st.write("")
+                        safe_mode = st.checkbox("API Mode (Safe)", value=True, help="Uses direct server connection. No browser window. More stable.")
+                        
+                        scrape_limit = st.slider("Max Leads", min_value=1, max_value=100, value=10)
+
+                        if st.button("Start Search", key="btn_insta"):
+                            uic.log_message(f"Starting Instagram Search for {tag}...")
+                            
+                            # 1. Start Campaign
+                            import modules.database as db
+                            campaign_id = db.create_campaign("Instagram", tag)
+                            
+                            with st.status(f"📸 Hunting Instagram for #{tag}...", expanded=True) as status:
+                                try:
+                                    if safe_mode:
+                                        # SAFE IMPORT: API MODE (No Browser)
+                                        # Bypasses Chrome binary completely
+                                        from modules.scraper_insta_api import InstagramHunterAPI
+                                        import modules.scraper_insta_api
+                                        importlib.reload(modules.scraper_insta_api)
+                                        
+                                        st.write("Initializing API connection...")
+                                        hunter = InstagramHunterAPI()
+                                        leads = hunter.scrape_hashtag(tag, max_posts=scrape_limit, username=manual_user, password=manual_pass)
+                                    else:
+                                        # RISKY IMPORT: Loads undetected-chromedriver
+                                        from modules.scraper_insta import InstagramHunter
+                                        # Force reload
+                                        import modules.scraper_insta
+                                        importlib.reload(modules.scraper_insta)
+                                        
+                                        st.write("Launching browser engine...")
+                                        hunter = InstagramHunter()
+                                        leads = hunter.scrape_hashtag(tag, username=manual_user, password=manual_pass, use_safe_mode=False)
+                                        
+                                    hunter.close()
+                                    
+                                    if leads:
+                                        st.success(f"Successfully extracted {len(leads)} raw targets.")
+                                        uic.log_message(f"Pipeline: {len(leads)} leads acquired.")
+                                        
+                                        # Save to Database with Campaign ID
+                                        st.write("Saving to CRM...")
+                                        count = LeadManager.add_lead(leads, campaign_id=campaign_id)
+                                        
+                                        # Update Campaign Metadata
+                                        if campaign_id:
+                                            db.update_campaign_count(campaign_id, count)
+                                            
+                                        if count > 0:
+                                            status.update(label=f"✅ Campaign Complete: {count} New Leads", state="complete", expanded=False)
+                                            st.balloons()
+                                            st.success(f"Creating Digital Twins... {count} Leads Added to CRM.")
+                                        else:
+                                            status.update(label="⚠️ Duplicates Excluded", state="complete", expanded=False)
+                                            st.warning("leads acquired but duplicates excluded.")
+                                    else:
+                                        status.update(label="❌ No Results", state="error", expanded=False)
+                                        st.error("FAILURE: 0 TARGETS ACQUIRED. Check Login or Strategy.")
+                                except Exception as e:
+                                    status.update(label="❌ Critical Error", state="error", expanded=True)
+                                    st.error(f"Scraper Error: {str(e)}")
+                                
+                    with c2:
+                        st.info("Status: Ready")
+                        st.caption("Enter a hashtag to begin searching.")
+                
+                with tab_db:
+                    st.subheader("📁 INSTAGRAM DATABASE")
+                    import modules.database as db
+                    df_insta = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'Instagram%' ORDER BY id DESC", db.get_connection())
+                    if not df_insta.empty:
+                        st.dataframe(df_insta, use_container_width=True, hide_index=True)
+                        csv = df_insta.to_csv(index=False).encode('utf-8')
+                        st.download_button("📥 DOWNLOAD INSTAGRAM DATA", data=csv, file_name="instagram_leads.csv", mime="text/csv", type="primary", key="dl_insta")
+                    else:
+                        st.info("Database Empty.")
+
+            elif lab_tab == "TELEGRAM":
+                # Telegram Logic...
+                tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
+                
+                with tab_control:
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                        st.subheader("/// TELEGRAM_INFILTRATOR")
+                        link = st.text_input("GROUP INVITE LINK", "https://t.me/example")
+                        
+                        st.write("")
+                        if st.button("Initialize Sequence", key="btn_tele"):
+                            uic.log_message(f"Infiltrating: {link}")
+                            with st.status("🕵️ Infiltrating Telegram Group...", expanded=True) as status:
+                                try:
+                                    # Blocking call for async
+                                    from modules.scraper_telegram import TelegramHunter
+                                    hunter = TelegramHunter()
+                                    st.write("Connecting to Telegram Client...")
+                                    leads = asyncio.run(hunter.scrape_members(link))
+                                    
+                                    count = LeadManager.add_lead(leads)
+                                    uic.log_message(f"Infiltration successful. Extracted {count}.")
+                                    status.update(label=f"✅ Infiltration Successful: {count} Targets", state="complete", expanded=False)
+                                    st.success(f"SUCCESS: {count} TARGETS ACQUIRED.")
+                                except Exception as e:
+                                    status.update(label="❌ Infiltration Failed", state="error", expanded=True)
+                                    st.error(f"Error: {e}")
+                    with c2:
+                        st.markdown("#### STATUS_MONITOR")
+                        uic.card_system_status("TELEGRAM", "Inactive", "API Beta", "tele_stat")
+                
+                with tab_db:
+                    st.subheader("📁 TELEGRAM DATABASE")
+                    import modules.database as db
+                    # Assuming generic leads or specific if available, but for now generic with source filter if applicable
+                    # Actually checking scraper_telegram.py would be best, but let's assume standard 'Telegram' source
+                    df_tele = pd.read_sql("SELECT * FROM leads WHERE source = 'Telegram' OR source LIKE 'Telegram%' ORDER BY id DESC", db.get_connection())
+                    if not df_tele.empty:
+                        st.dataframe(df_tele, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No Telegram data found.")
+
+            elif lab_tab == "X / TWITTER":
+                 tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
             
-            with tab_control:
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                     st.subheader("/// X_LEAD_MINER (ENGAGEMENT MODE)")
-                     st.caption("Strategy: Harvests Authors & Commenters from viral posts.")
-                     query = st.text_input("TOPIC KEYWORD", "Interior Design", help="Finds tweets about this topic.")
-                     loc = st.text_input("LOCATION FILTER", "Kuala Lumpur", help="Narrow down by location.")
-                     days = st.slider("LOOKBACK PERIOD (DAYS)", 1, 60, 30, help="How far back to search?")
-                     limit = st.slider("TARGET LEADS", 10, 100, 20)
-                     
-                     if st.button("Initialize Sequence", key="btn_x"):
-                         uic.log_message(f"Deploying X Engagement Scraper on '{query}'...")
-                         with st.spinner(">> EXEC: Hunting Viral Discussions..."):
-                             from modules.scraper_x import XHunter
-                             hunter = XHunter()
-                             count = hunter.hunt_strategic_engagement(query, loc, days_back=days, limit=limit)
-                             hunter.close()
-                             if count:
-                                 st.success(f"EXTRACTED {count} LEADS (Authors + Commenters)")
-                                 from modules.notifications import SystemAlert
-                                 SystemAlert().send_alert("X Scraper", f"Engagement Scrape: Found {count} leads for '{query}'")
-                             else: st.warning("NO ENGAGEMENT FOUND")
-                with c2:
-                     st.markdown("#### STATUS_MONITOR")
-                     uic.animation_radar()
+                 with tab_control:
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                         st.subheader("/// X_LEAD_MINER (ENGAGEMENT MODE)")
+                         st.caption("Strategy: Harvests Authors & Commenters from viral posts.")
+                         query = st.text_input("TOPIC KEYWORD", "Interior Design", help="Finds tweets about this topic.")
+                         loc = st.text_input("LOCATION FILTER", "Kuala Lumpur", help="Narrow down by location.")
+                         days = st.slider("LOOKBACK PERIOD (DAYS)", 1, 60, 30, help="How far back to search?")
+                         limit = st.slider("TARGET LEADS", 10, 100, 20)
+                         
+                         if st.button("Initialize Sequence", key="btn_x"):
+                             uic.log_message(f"Deploying X Engagement Scraper on '{query}'...")
+                             uic.log_message(f"Deploying X Engagement Scraper on '{query}'...")
+                             with st.status(f"🐦 Mining X for '{query}'...", expanded=True) as status:
+                                 try:
+                                     from modules.scraper_x import XHunter
+                                     hunter = XHunter()
+                                     st.write("Analyzing viral discussions...")
+                                     count = hunter.hunt_strategic_engagement(query, loc, days_back=days, limit=limit)
+                                     hunter.close()
+                                     
+                                     if count:
+                                         status.update(label=f"✅ Extracted {count} Leads", state="complete", expanded=False)
+                                         st.success(f"EXTRACTED {count} LEADS (Authors + Commenters)")
+                                         from modules.notifications import SystemAlert
+                                         SystemAlert().send_alert("X Scraper", f"Engagement Scrape: Found {count} leads for '{query}'")
+                                     else: 
+                                         status.update(label="⚠️ No engagement found", state="error", expanded=False)
+                                         st.warning("NO ENGAGEMENT FOUND")
+                                 except Exception as e:
+                                     status.update(label="❌ Scraper Error", state="error", expanded=True)
+                                     st.error(f"Error: {e}")
+                    with c2:
+                         st.markdown("#### STATUS_MONITOR")
+                         uic.card_system_status("X / TWITTER", "Inactive", "API Beta", "x_stat")
+    
+                 with tab_db:
+                    st.subheader("📁 X / TWITTER DATABASE")
+                    import modules.database as db
+                    df_x = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'X%' OR source LIKE 'Twitter%' ORDER BY id DESC", db.get_connection())
+                    if not df_x.empty:
+                        st.dataframe(df_x, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No X/Twitter data found.")
 
-            with tab_db:
-                st.subheader("📁 X / TWITTER DATABASE")
-                import modules.database as db
-                df_x = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'X%' OR source LIKE 'Twitter%' ORDER BY id DESC", db.get_connection())
-                if not df_x.empty:
-                    st.dataframe(df_x, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No X/Twitter data found.")
-
-        elif chosen_tab == "IPROPERTY":
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
+            elif lab_tab == "IPROPERTY":
+                tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
             
-            with tab_control:
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                     st.subheader("/// IPROPERTY_ORACLE")
-                     query = st.text_input("PROPERTY TYPE", "Balcony", help="Filter by features or types.")
-                     loc = st.text_input("LOCATION SLUG", "kuala-lumpur", help="e.g. 'mont-kiara', 'petaling-jaya'")
-                     
-                     # New Controls
-                     col_a, col_b = st.columns(2)
-                     with col_a:
-                         days = st.slider("LOOKBACK (DAYS)", 1, 90, 15, key="ip_days")
-                     with col_b:
-                         limit = st.slider("TARGET AGENTS", 10, 200, 30, key="ip_limit")
-                     
-                     if st.button("Initialize Sequence", key="btn_iprop"):
-                         uic.log_message(f"Deploying iProperty Hunter in {loc} (Last {days} days)...")
-                         with st.spinner(">> EXEC: Scanning Listings..."):
-                             from modules.scraper_iproperty import IPropertyHunter
-                             hunter = IPropertyHunter()
-                             count = hunter.hunt_listings(query, loc, days_back=days, limit=limit)
-                             hunter.close()
-                             if count:
-                                 st.success(f"EXTRACTED {count} AGENTS")
-                                 from modules.notifications import SystemAlert
-                                 SystemAlert().send_alert("iProperty Scraper", f"Found {count} agents in {loc}")
-                             else: st.warning("NO TARGETS FOUND")
-                with c2:
-                     st.markdown("#### STATUS_MONITOR")
-                     uic.animation_radar()
+                with tab_control:
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                         st.subheader("/// IPROPERTY_ORACLE")
+                         query = st.text_input("PROPERTY TYPE", "Balcony", help="Filter by features or types.")
+                         loc = st.text_input("LOCATION SLUG", "kuala-lumpur", help="e.g. 'mont-kiara', 'petaling-jaya'")
+                         
+                         # New Controls
+                         col_a, col_b = st.columns(2)
+                         with col_a:
+                             days = st.slider("LOOKBACK (DAYS)", 1, 90, 15, key="ip_days")
+                         with col_b:
+                             limit = st.slider("TARGET AGENTS", 10, 200, 30, key="ip_limit")
+                         
+                         if st.button("Initialize Sequence", key="btn_iprop"):
+                             uic.log_message(f"Deploying iProperty Hunter in {loc} (Last {days} days)...")
+                             uic.log_message(f"Deploying iProperty Hunter in {loc} (Last {days} days)...")
+                             with st.status(f"🏠 Scanning iProperty ({loc})...", expanded=True) as status:
+                                 try:
+                                     from modules.scraper_iproperty import IPropertyHunter
+                                     hunter = IPropertyHunter()
+                                     st.write("Accessing property listings...")
+                                     count = hunter.hunt_listings(query, loc, days_back=days, limit=limit)
+                                     hunter.close()
+                                     
+                                     if count:
+                                         status.update(label=f"✅ Found {count} Agents", state="complete", expanded=False)
+                                         st.success(f"EXTRACTED {count} AGENTS")
+                                         from modules.notifications import SystemAlert
+                                         SystemAlert().send_alert("iProperty Scraper", f"Found {count} agents in {loc}")
+                                     else: 
+                                         status.update(label="⚠️ No targets found", state="error", expanded=False)
+                                         st.warning("NO TARGETS FOUND")
+                                 except Exception as e:
+                                     status.update(label="❌ Scraper Error", state="error", expanded=True)
+                                     st.error(f"Error: {e}")
+                    with c2:
+                         st.markdown("#### STATUS_MONITOR")
+                         uic.card_system_status("IPROPERTY", "Inactive", "API Beta", "ip_stat")
+    
+                with tab_db:
+                    st.subheader("📁 IPROPERTY DATABASE")
+                    import modules.database as db
+                    df_ip = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'iProperty%' ORDER BY id DESC", db.get_connection())
+                    if not df_ip.empty:
+                        st.dataframe(df_ip, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No iProperty data found.")
 
-            with tab_db:
-                st.subheader("📁 IPROPERTY DATABASE")
-                import modules.database as db
-                df_ip = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'iProperty%' ORDER BY id DESC", db.get_connection())
-                if not df_ip.empty:
-                    st.dataframe(df_ip, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No iProperty data found.")
-
-        elif chosen_tab == "PROP GURU":
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
+            elif lab_tab == "PROP GURU":
+                tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
             
-            with tab_control:
-                c1, c2 = st.columns([2, 1])
-                with c1:
-                      st.subheader("/// PROPERTY_SCANNER (GOD MODE)")
-                      st.caption("Strategy: Session Persistence + Automated Pagination")
-                      
-                      query = st.text_input("SEARCH QUERY", "Balcony", key="pg_query")
-                      loc = st.text_input("LOCATION", "kuala-lumpur", key="pg_loc", help="kuala-lumpur, selangor, penang, johor")
-                      limit = st.slider("TARGET AGENTS", 10, 200, 30, key="pg_limit")
-                      
-                      if st.button("Initialize Sequence", key="btn_prop"):
-                          from modules.scraper_propguru import PropGuruHunter
-                          uic.log_message(f"Deploying Property Hunter (Target: {limit} agents)...")
+                with tab_control:
+                    c1, c2 = st.columns([2, 1])
+                    with c1:
+                          st.subheader("/// PROPERTY_SCANNER (GOD MODE)")
+                          st.caption("Strategy: Session Persistence + Automated Pagination")
                           
-                          with st.spinner(">> EXEC: Bypassing Defense Systems..."):
-                              hunter = PropGuruHunter()
-                              count = hunter.hunt_listings(query=query, location=loc, limit=limit)
-                              hunter.close()
+                          query = st.text_input("SEARCH QUERY", "Balcony", key="pg_query")
+                          loc = st.text_input("LOCATION", "kuala-lumpur", key="pg_loc", help="kuala-lumpur, selangor, penang, johor")
+                          limit = st.slider("TARGET AGENTS", 10, 200, 30, key="pg_limit")
+                          
+                          if st.button("Initialize Sequence", key="btn_prop"):
+                              from modules.scraper_propguru import PropGuruHunter
+                              uic.log_message(f"Deploying Property Hunter (Target: {limit} agents)...")
                               
-                              if count:
-                                  st.success(f"EXTRACTED {count} AGENTS")
-                                  from modules.notifications import SystemAlert
-                                  SystemAlert().send_alert("PropertyGuru Scraper", f"Found {count} agents in {loc}")
-                              else:
-                                  st.warning("NO TARGETS FOUND (Check Cloudflare)")
+                              with st.spinner(">> EXEC: Bypassing Defense Systems..."):
+                                  hunter = PropGuruHunter()
+                                  count = hunter.hunt_listings(query=query, location=loc, limit=limit)
+                                  hunter.close()
+                                  
+                                  if count:
+                                      st.success(f"EXTRACTED {count} AGENTS")
+                                      from modules.notifications import SystemAlert
+                                      SystemAlert().send_alert("PropertyGuru Scraper", f"Found {count} agents in {loc}")
+                                  else:
+                                      st.warning("NO TARGETS FOUND (Check Cloudflare)")
                 with c2:
-                     st.markdown("#### STATUS_MONITOR")
-                     uic.animation_radar()
+                         st.markdown("#### STATUS_MONITOR")
+                         uic.card_system_status("PROPGURU", "Inactive", "API Beta", "pg_stat")
+    
+                with tab_db:
+                    st.subheader("📁 PROPERTY GURU DATABASE")
+                    import modules.database as db
+                    df_pg = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'PropertyGuru%' ORDER BY id DESC", db.get_connection())
+                    if not df_pg.empty:
+                        st.dataframe(df_pg, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No PropertyGuru data found.")
 
-            with tab_db:
-                st.subheader("📁 PROPERTY GURU DATABASE")
-                import modules.database as db
-                df_pg = pd.read_sql("SELECT * FROM leads WHERE source LIKE 'PropertyGuru%' ORDER BY id DESC", db.get_connection())
-                if not df_pg.empty:
-                    st.dataframe(df_pg, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No PropertyGuru data found.")
-
-        elif chosen_tab == "LINKEDIN (NEW)":
-            st.markdown("### `LINKEDIN GHOST PROTOCOL`")
-            st.caption("Target high-value clients (Developers, Hospitality, Corporate) without risking your account.")
+        elif chosen_tab == "LINKEDIN X-RAY":
+            st.subheader("LinkedIn X-Ray")
+            st.caption("Find professionals via Google Search (No Login Required).")
             
-            tab_control, tab_db = st.tabs(["🚀 LAUNCHPAD", "🗄️ DATABASE"])
+            tab_control, tab_db = st.tabs(["🚀 Search", "🗄️ Results"])
             
             with tab_control:
                 c1, c2 = st.columns([2, 1])
                 with c1:
-                    st.subheader("/// GOOGLE_X-RAY_SCANNER")
-                    st.caption("Scrapes Google for LinkedIn Profiles. 100% Safe (No Login Required).")
+                    role = st.text_input("Target Role", "Project Manager", help="e.g. Property Developer, Facilities Manager")
+                    loc = st.text_input("Location", "Kuala Lumpur")
                     
-                    role = st.text_input("TARGET ROLE", "Project Manager", help="e.g. Property Developer, Facilities Manager, Hotel Manager")
-                    loc = st.text_input("LOCATION", "Kuala Lumpur")
+                    limit = st.slider("Max Profiles", 10, 100, 20, key="ln_limit")
                     
-                    limit = st.slider("TARGET PROFILES", 10, 100, 20, key="ln_limit")
-                    
-                    if st.button("Initialize X-Ray Sequence", key="btn_xray"):
-                        uic.log_message(f"Deploying X-Ray for {role} in {loc}...")
-                        with st.spinner(">> EXEC: Scanning Google Index..."):
+                    if st.button("Start X-Ray Search", key="btn_xray"):
+                        uic.log_message(f"Searching for {role} in {loc}...")
+                        with st.spinner("Scanning Google Index..."):
                             from modules.scraper_linkedin_xray import LinkedInXRay
                             hunter = LinkedInXRay()
                             count = hunter.hunt_targets(role, loc, limit)
                             hunter.close()
                             
                             if count:
-                                st.success(f"ACQUIRED {count} CANDIDATES (Saved to DB)")
-                                uic.log_message(f"X-Ray successful. {count} targets added to pipeline.")
+                                st.success(f"Found {count} Candidates")
+                                uic.log_message(f"X-Ray successful. {count} leads added.")
                             else:
-                                st.warning("NO TARGETS FOUND. Try broader terms.")
+                                st.warning("No targets found. Try broader terms.")
                                 
                 with c2:
-                    st.markdown("#### STATUS_MONITOR")
-                    uic.animation_radar()
-                    st.info("SAFE MODE: ACTIVE")
+                    st.info("Status: Ready (Safe Mode)")
 
             with tab_db:
                 st.subheader("📁 LINKEDIN DATABASE")
@@ -616,11 +863,10 @@ if "1. THE HUNTER" in page:
     # Map
     # leads = LeadManager.get_leads_with_coords() # This line was commented out in the original, keeping it commented.
 
-# --- MODULE 2: THE BRAIN ---
-# --- MODULE 2: THE BRAIN ---
-elif "2. THE BRAIN" in page:
-    st.title("THE BRAIN")
-    st.markdown("### `NEURAL CORTEX: INTELLIGENCE HUB`")
+# --- MODULE 2: PIPELINE ---
+elif "Pipeline" in page:
+    st.title("Pipeline & Database")
+    st.caption("Manage and enrich your leads.")
     st.markdown("---")
     
     # Load V2 Data
@@ -644,12 +890,12 @@ elif "2. THE BRAIN" in page:
     st.write("")
     
     # --- CONTROL & FILTER LAYER ---
-    with st.expander("🔍 NEURAL SEARCH & FILTERS", expanded=False):
+    with st.expander("Filter & Search", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
-            search = st.text_input("Deep Search", placeholder="Name, Bio, or Notes...")
+            search = st.text_input("Search Database", placeholder="Name, Bio, or Notes...")
         with c2:
-            source_filter = st.multiselect("Source Channel", df['source'].unique() if not df.empty else [])
+            source_filter = st.multiselect("Source", df['source'].unique() if not df.empty else [])
             
     # Apply Filters
     dff = df.copy()
@@ -658,138 +904,146 @@ elif "2. THE BRAIN" in page:
     if source_filter:
         dff = dff[dff['source'].isin(source_filter)]
             
-    # --- DATA GRID ---
+    # --- DATA GRID (FRAGMENT) ---
     st.markdown("#### `DATA_MATRIX`")
-    
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        # Advanced Data Editor
-        edited_df = st.data_editor(
-            dff, 
-            num_rows="dynamic", 
-            use_container_width=True, 
-            height=600,
-            column_config={
-                "profile_url": st.column_config.LinkColumn("Profile", display_text="LINK"),
-                "ice_breaker": st.column_config.TextColumn("🧊 Ice Breaker", width="medium"),
-                "website_summary": st.column_config.TextColumn("📝 Summary"),
-                "research_status": st.column_config.SelectboxColumn("Research", options=["Done", "Pending", "Failed"], required=False),
-                "lat": st.column_config.NumberColumn(format="%.4f"),
-                "lon": st.column_config.NumberColumn(format="%.4f"),
-                "status": st.column_config.SelectboxColumn(
-                    "Status",
-                    options=["New", "Contacted", "Qualified", "Closed", "Archived"],
-                    required=True
-                ),
-                "total_score": st.column_config.ProgressColumn(
-                    "AI Score",
-                    help="Lead Quality Score",
-                    format="%f",
-                    min_value=0,
-                    max_value=100,
-                ),
-            },
-            hide_index=True
-        )
-        
-    with c2:
-        st.markdown("#### OPERATIONS")
-        st.caption("Pending Changes: Auto-detected")
-        
-        if st.button("💾 COMMIT TO MEMORY", type="primary", use_container_width=True):
-            try:
-                # Save only the edits
-                LeadManager.save_data(edited_df) 
-                st.toast("Neural Database Updated!", icon="🧠")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Write Error: {e}")
-        
-        st.write("")
-        st.markdown("#### ENRICHMENT")
-        
-        # --- CLAY MODE: DEEP RESEARCH ---
-        if st.button("🕵️ DEEP RESEARCH (CLAY-MODE)", help="Visits websites, analyzes business, writes ice-breakers."):
-             with st.spinner("🕵️ Agent is surfing the web... (Can take 10s per lead)"):
-                 from modules.research_agent import ResearchAgent
-                 researcher = ResearchAgent()
-                 
-                 # Get relevant leads (e.g. status='New' and research_status is NULL)
-                 # Direct SQL is faster
-                 import sqlite3
-                 conn_r = sqlite3.connect("volts.db")
-                 conn_r.row_factory = sqlite3.Row
-                 # Limit to 5 at a time to prevent timeouts for now
-                 pending_leads = conn_r.execute("SELECT id, name FROM leads WHERE research_status IS NULL OR research_status = '' LIMIT 5").fetchall()
-                 conn_r.close()
-                 
-                 if not pending_leads:
-                     st.info("No unscanned leads found. (Check 'research_status' column)")
-                 else:
-                     count = 0
-                     progress_bar = st.progress(0)
-                     for i, lead in enumerate(pending_leads):
-                         st.toast(f"Researching: {lead['name']}...")
-                         success = researcher.research_lead(lead['id'])
-                         if success: count += 1
-                         progress_bar.progress((i + 1) / len(pending_leads))
-                         
-                     st.success(f"✅ Deep Research Complete: {count} Profiles Updated.")
-                     st.balloons()
-                     time.sleep(2)
-                     st.rerun()
 
-        if st.button("✨ AUTO-SCORE (Quick)", help="Uses Gemini to analyze Bio/Notes and update Score"):
-             with st.spinner("🧠 Neural Analysis in Progress..."):
-                 from modules.ai_engine import AIGhostwriter
-                 ai = AIGhostwriter()
-                 
-                 if not ai.model:
-                     st.error("Gemini API Key missing. Check Settings.")
-                 else:
-                     # Analyze all leads
-                     conn = db.get_connection()
-                     c = conn.cursor()
+    @st.fragment
+    def render_pipeline_editor(data):
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            # Advanced Data Editor
+            edited_df = st.data_editor(
+                data, 
+                num_rows="dynamic", 
+                use_container_width=True, 
+                height=600,
+                column_config={
+                    "profile_url": st.column_config.LinkColumn("Profile", display_text="LINK"),
+                    "ice_breaker": st.column_config.TextColumn("🧊 Ice Breaker", width="medium"),
+                    "website_summary": st.column_config.TextColumn("📝 Summary"),
+                    "research_status": st.column_config.SelectboxColumn("Research", options=["Done", "Pending", "Failed"], required=False),
+                    "lat": st.column_config.NumberColumn(format="%.4f"),
+                    "lon": st.column_config.NumberColumn(format="%.4f"),
+                    "status": st.column_config.SelectboxColumn(
+                        "Status",
+                        options=["New", "Contacted", "Qualified", "Closed", "Archived"],
+                        required=True
+                    ),
+                    "total_score": st.column_config.ProgressColumn(
+                        "AI Score",
+                        help="Lead Quality Score",
+                        format="%f",
+                        min_value=0,
+                        max_value=100,
+                    ),
+                },
+                hide_index=True,
+                key="pipeline_editor_frag"
+            )
+
+        with c2:
+            st.markdown("#### OPERATIONS")
+            st.caption("Pending Changes: Auto-detected")
+
+            if st.button("💾 COMMIT TO MEMORY", type="primary", use_container_width=True):
+                try:
+                    import modules.database as db
+                    # Save only the edits
+                    LeadManager.save_data(edited_df) 
+                    st.toast("Neural Database Updated!", icon="🧠")
+                    st.cache_data.clear() # Clear cache on save
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Write Error: {e}")
+
+            st.write("")
+            st.markdown("#### ENRICHMENT")
+
+            # --- CLAY MODE: DEEP RESEARCH ---
+            if st.button("🕵️ DEEP RESEARCH (CLAY-MODE)", help="Visits websites, analyzes business, writes ice-breakers."):
+                 with st.spinner("🕵️ Agent is surfing the web... (Can take 10s per lead)"):
+                     from modules.research_agent import ResearchAgent
+                     researcher = ResearchAgent()
                      
-                     # Get all leads that need scoring
-                     leads = conn.execute("SELECT id, name FROM leads WHERE total_score = 0 OR total_score IS NULL").fetchall()
+                     # Get relevant leads (e.g. status='New' and research_status is NULL)
+                     import sqlite3
+                     conn_r = sqlite3.connect("volts.db")
+                     conn_r.row_factory = sqlite3.Row
+                     # Limit to 5 at a time to prevent timeouts for now
+                     pending_leads = conn_r.execute("SELECT id, name FROM leads WHERE research_status IS NULL OR research_status = '' LIMIT 5").fetchall()
+                     conn_r.close()
                      
-                     enriched = 0
-                     for lead in leads:
-                         lead_id = lead['id']
-                         name = lead['name']
-                         
-                         # Get bio from specialized tables
-                         bio_query = """
-                         SELECT COALESCE(li.headline, i.bio_text, pa.specialty_area, '') as bio,
-                                CASE 
-                                    WHEN li.id IS NOT NULL THEN 'LinkedIn'
-                                    WHEN i.id IS NOT NULL THEN 'Instagram'
-                                    ELSE 'Manual'
-                                END as source
-                         FROM leads l
-                         LEFT JOIN linkedin_profiles li ON l.id = li.lead_id
-                         LEFT JOIN instagram_profiles i ON l.id = i.lead_id
-                         LEFT JOIN property_agents pa ON l.id = pa.lead_id
-                         WHERE l.id = ?
-                         """
-                         result = conn.execute(bio_query, (lead_id,)).fetchone()
-                         
-                         if result:
-                             bio = result['bio']
-                             source = result['source']
-                             score = ai.intelligent_score(name, bio, source)
+                     if not pending_leads:
+                         st.info("No unscanned leads found. (Check 'research_status' column)")
+                     else:
+                         count = 0
+                         progress_bar = st.progress(0)
+                         for i, lead in enumerate(pending_leads):
+                             st.toast(f"Researching: {lead['name']}...")
+                             success = researcher.research_lead(lead['id'])
+                             if success: count += 1
+                             progress_bar.progress((i + 1) / len(pending_leads))
                              
-                             # Update score
-                             c.execute("UPDATE leads SET total_score = ? WHERE id = ?", (score, lead_id))
-                             enriched += 1
+                         st.success(f"✅ Deep Research Complete: {count} Profiles Updated.")
+                         st.balloons()
+                         time.sleep(2)
+                         st.rerun()
+
+            if st.button("✨ AUTO-SCORE (Quick)", help="Uses Gemini to analyze Bio/Notes and update Score"):
+                 with st.spinner("🧠 Neural Analysis in Progress..."):
+                     from modules.ai_engine import AIGhostwriter
+                     ai = AIGhostwriter()
                      
-                     conn.commit()
-                     conn.close()
-                     
-                     st.success(f"✅ Enriched {enriched} leads with AI Intelligence")
-                     st.balloons()
-                     st.rerun()
+                     if not ai.model:
+                         st.error("Gemini API Key missing. Check Settings.")
+                     else:
+                         # Analyze all leads
+                         import modules.database as db
+                         conn = db.get_connection()
+                         c = conn.cursor()
+                         
+                         # Get all leads that need scoring
+                         leads = conn.execute("SELECT id, name FROM leads WHERE total_score = 0 OR total_score IS NULL").fetchall()
+                         
+                         enriched = 0
+                         for lead in leads:
+                             lead_id = lead['id']
+                             name = lead['name']
+                             
+                             # Get bio from specialized tables
+                             bio_query = """
+                             SELECT COALESCE(li.headline, i.bio_text, pa.specialty_area, '') as bio,
+                                    CASE 
+                                        WHEN li.id IS NOT NULL THEN 'LinkedIn'
+                                        WHEN i.id IS NOT NULL THEN 'Instagram'
+                                        ELSE 'Manual'
+                                    END as source
+                             FROM leads l
+                             LEFT JOIN linkedin_profiles li ON l.id = li.lead_id
+                             LEFT JOIN instagram_profiles i ON l.id = i.lead_id
+                             LEFT JOIN property_agents pa ON l.id = pa.lead_id
+                             WHERE l.id = ?
+                             """
+                             result = conn.execute(bio_query, (lead_id,)).fetchone()
+                             
+                             if result:
+                                 bio = result['bio']
+                                 source = result['source']
+                                 score = ai.intelligent_score(name, bio, source)
+                                 
+                                 # Update score
+                                 c.execute("UPDATE leads SET total_score = ? WHERE id = ?", (score, lead_id))
+                                 enriched += 1
+                         
+                         conn.commit()
+                         conn.close()
+                         
+                         st.success(f"✅ Enriched {enriched} leads with AI Intelligence")
+                         st.balloons()
+                         st.cache_data.clear() # Clear cache on update
+                         st.rerun()
+
+    render_pipeline_editor(dff)
                 
     # --- VISUALIZATION LAYER ---
     st.write("")
@@ -819,21 +1073,21 @@ elif "2. THE BRAIN" in page:
     
     sc1, sc2, sc3, sc4 = st.columns(4)
     with sc1:
-        ui.metric_card(
+        uic.metric_card(
             title="🔥 HOT LEADS", 
             content=f"{score_dist['hot']}", 
             description=f"Score ≥ {config.threshold_hot}", 
             key="m_hot"
         )
     with sc2:
-        ui.metric_card(
+        uic.metric_card(
             title="⚡ WARM LEADS", 
             content=f"{score_dist['warm']}", 
             description=f"Score {config.threshold_warm}-{config.threshold_hot-1}", 
             key="m_warm"
         )
     with sc3:
-        ui.metric_card(
+        uic.metric_card(
             title="❄️ COLD LEADS", 
             content=f"{score_dist['cold']}", 
             description=f"Score < {config.threshold_warm}", 
@@ -844,7 +1098,7 @@ elif "2. THE BRAIN" in page:
         avg_score = 0
         if not dff.empty and 'total_score' in dff.columns:
             avg_score = int(dff['total_score'].fillna(0).mean())
-        ui.metric_card(
+        uic.metric_card(
             title="📊 AVG SCORE", 
             content=f"{avg_score}", 
             description="Portfolio Health", 
@@ -957,397 +1211,27 @@ elif "2. THE BRAIN" in page:
         else:
             st.info("No leads to analyze.")
 
-# --- MODULE 3: THE STUDIO (v2 Full Stack) ---
-elif "3. THE STUDIO" in page:
-    st.title("THE STUDIO")
-    st.markdown("### `AUTONOMOUS CONTENT FACTORY`")
-    st.markdown("---")
+# --- MODULE 3: CONTENT STUDIO (v2 Full Stack) ---
+# --- MODULE 3: CONTENT STUDIO ---
+elif "Content Studio" in page:
+    from modules.ui_studio_new import render_studio
+    render_studio()
     
-    # Studio Sub-Tabs
-    studio_tabs = ui.tabs(
-        options=["🚀 PREMIUM GENERATOR", "🎬 VIDEO STUDIO"],
-        default_value="🚀 PREMIUM GENERATOR",
-        key="studio_tabs"
-    )
-    
-    # --- TAB 0: PREMIUM GENERATOR (Enterprise-Grade) ---
-    if studio_tabs == "🚀 PREMIUM GENERATOR":
-        st.subheader("/// PREMIUM IMAGE GENERATOR")
-        st.caption("Enterprise-grade generation rivaling Midjourney, DALL-E 3 & Adobe Firefly • Powered by FLUX.1")
-        
-        from modules.premium_studio import PremiumStudio, GenerationConfig
-        
-        studio = PremiumStudio()
-        config = GenerationConfig()
-        
-        # Main layout
-        col_main, col_side = st.columns([3, 1])
-        
-        with col_main:
-            # --- PROMPT WORKSHOP ---
-            st.markdown("#### 📝 PROMPT WORKSHOP")
-            
-            prompt = st.text_area(
-                "Describe your vision",
-                placeholder="e.g., Modern luxury penthouse living room with floor-to-ceiling windows, city skyline view at sunset...",
-                height=100,
-                key="premium_prompt"
-            )
-            
-            # Enhance button
-            col_enhance, col_negative = st.columns([1, 2])
-            with col_enhance:
-                enhance_prompt = st.checkbox("✨ AI Enhance Prompt", value=True, help="Uses Gemini to expand your prompt into professional detail")
-            
-            with col_negative:
-                negative_prompt = st.text_input(
-                    "Avoid (optional)", 
-                    placeholder="e.g., people, clutter, text watermarks...",
-                    help="Elements to exclude from the image"
-                )
-            
-            # --- GENERATION CONTROLS ---
-            st.markdown("---")
-            st.markdown("#### ⚙️ GENERATION CONTROLS")
-            
-            ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
-            
-            with ctrl_col1:
-                mode = st.selectbox(
-                    "Quality Mode",
-                    options=["⚡ Quick (2s)", "🎨 Quality (15s)", "🏆 Ultra (30s)"],
-                    index=0,
-                    help="Higher quality = longer generation time"
-                )
-                mode_map = {"⚡ Quick (2s)": "schnell", "🎨 Quality (15s)": "dev", "🏆 Ultra (30s)": "pro"}
-                selected_mode = mode_map[mode]
-            
-            with ctrl_col2:
-                aspect = st.selectbox(
-                    "Aspect Ratio",
-                    options=["1:1 Square", "16:9 Landscape", "3:2 Landscape", "9:16 Portrait", "2:3 Portrait"],
-                    index=0
-                )
-                aspect_map = {
-                    "1:1 Square": "square",
-                    "16:9 Landscape": "landscape_16_9",
-                    "3:2 Landscape": "landscape_3_2",
-                    "9:16 Portrait": "portrait_9_16",
-                    "2:3 Portrait": "portrait_2_3"
-                }
-                selected_aspect = aspect_map[aspect]
-            
-            with ctrl_col3:
-                style_preset = st.selectbox(
-                    "Style Preset",
-                    options=["None"] + list(config.STYLE_PRESETS.keys()),
-                    index=0,
-                    format_func=lambda x: x.replace("_", " ").title()
-                )
-                if style_preset == "None":
-                    style_preset = None
-            
-            with ctrl_col4:
-                seed = st.number_input("Seed (optional)", min_value=0, max_value=999999999, value=0, help="0 = random. Set a seed for reproducible results")
-                if seed == 0:
-                    seed = None
-            
-            # --- REFERENCE IMAGES ---
-            st.markdown("---")
-            with st.expander("🎨 Style & Structure References (Adobe Firefly feature)", expanded=False):
-                ref_col1, ref_col2 = st.columns(2)
-                
-                with ref_col1:
-                    st.markdown("**Style Reference**")
-                    st.caption("Upload an image to match its colors, lighting, and mood")
-                    style_ref = st.file_uploader("Style reference image", type=['jpg', 'jpeg', 'png'], key="style_ref")
-                    style_ref_path = None
-                    if style_ref:
-                        os.makedirs("assets/studio/references", exist_ok=True)
-                        style_ref_path = f"assets/studio/references/style_{int(time.time())}.jpg"
-                        with open(style_ref_path, 'wb') as f:
-                            f.write(style_ref.getbuffer())
-                        st.image(style_ref_path, width=200)
-                
-                with ref_col2:
-                    st.markdown("**Structure Reference**")
-                    st.caption("Upload a floor plan or layout to preserve spatial structure")
-                    struct_ref = st.file_uploader("Structure reference image", type=['jpg', 'jpeg', 'png'], key="struct_ref")
-                    if struct_ref:
-                        st.image(struct_ref, width=200)
-                        st.info("Structure reference will be analyzed for composition")
-            
-            # --- GENERATE BUTTON ---
-            st.markdown("---")
-            
-            generate_disabled = not prompt.strip()
-            
-            if st.button("🚀 GENERATE IMAGE", type="primary", use_container_width=True, disabled=generate_disabled):
-                if not studio.flux_generator.client:
-                    st.error("❌ Replicate API token not configured! Add REPLICATE_API_TOKEN to your .env file.")
-                else:
-                    # Show enhanced prompt if enabled
-                    if enhance_prompt:
-                        with st.spinner("✨ Enhancing prompt with AI..."):
-                            enhanced = studio.prompt_enhancer.enhance(prompt, style_preset)
-                            st.info(f"**Enhanced prompt:** {enhanced[:200]}...")
-                    
-                    with st.spinner(f"🎨 Generating with FLUX.1-{selected_mode}... This may take {mode.split('(')[1].replace(')', '')}"):
-                        result = studio.generate(
-                            prompt=prompt,
-                            mode=selected_mode,
-                            aspect_ratio=selected_aspect,
-                            style_preset=style_preset,
-                            style_reference_path=style_ref_path if 'style_ref_path' in dir() else None,
-                            enhance_prompt=enhance_prompt,
-                            negative_prompt=negative_prompt if negative_prompt else None,
-                            seed=seed
-                        )
-                        
-                        if result["success"]:
-                            st.success("✅ Generation complete!")
-                            
-                            # Display images
-                            for img_path in result["images"]:
-                                st.image(img_path, use_container_width=True)
-                                
-                                # Action buttons
-                                action_col1, action_col2, action_col3, action_col4 = st.columns(4)
-                                
-                                with action_col1:
-                                    if st.button("🔄 Variations", key=f"var_{img_path}"):
-                                        st.session_state['pending_variation'] = img_path
-                                        st.rerun()
-                                
-                                with action_col2:
-                                    if st.button("⬆️ Upscale 2x", key=f"up_{img_path}"):
-                                        st.session_state['pending_upscale'] = img_path
-                                        st.rerun()
-                                
-                                with action_col3:
-                                    if st.button("↔️ Expand", key=f"exp_{img_path}"):
-                                        st.session_state['pending_expand'] = img_path
-                                        st.rerun()
-                                
-                                with action_col4:
-                                    with open(img_path, 'rb') as f:
-                                        st.download_button("💾 Download", f.read(), file_name=os.path.basename(img_path), mime="image/jpeg")
-                            
-                            # Show generation details
-                            with st.expander("📋 Generation Details"):
-                                st.json({
-                                    "mode": result["mode"],
-                                    "dimensions": result["dimensions"],
-                                    "original_prompt": result["original_prompt"],
-                                    "enhanced_prompt": result["enhanced_prompt"][:500] + "..." if len(result["enhanced_prompt"]) > 500 else result["enhanced_prompt"]
-                                })
-                        else:
-                            st.error(f"❌ Generation failed: {result['error']}")
-            
-            # Handle pending actions from previous run
-            if st.session_state.get('pending_variation'):
-                img_path = st.session_state.pop('pending_variation')
-                st.markdown("---")
-                st.markdown("#### 🔄 Creating Variations...")
-                with st.spinner("Generating 4 variations..."):
-                    result = studio.create_variations(img_path, prompt, 4)
-                    if result["success"]:
-                        cols = st.columns(4)
-                        for i, url in enumerate(result["variations"][:4]):
-                            with cols[i]:
-                                st.image(url, use_container_width=True)
-                    else:
-                        st.error(f"Variation failed: {result['error']}")
-            
-            if st.session_state.get('pending_upscale'):
-                img_path = st.session_state.pop('pending_upscale')
-                st.markdown("---")
-                st.markdown("#### ⬆️ Upscaling 2x...")
-                with st.spinner("Enhancing resolution with Real-ESRGAN..."):
-                    result = studio.upscale_image(img_path, 2)
-                    if result["success"]:
-                        st.image(result["upscaled_url"], use_container_width=True)
-                        st.success("✅ Upscaled to 2x resolution!")
-                    else:
-                        st.error(f"Upscale failed: {result['error']}")
-        
-        with col_side:
-            st.markdown("#### 🖼️ GALLERY")
-            st.caption("Recent Premium Generations")
-            
-            # Show recent premium images
-            import glob
-            premium_images = glob.glob("assets/studio/premium/*.jpg")
-            premium_images = sorted(premium_images, key=os.path.getmtime, reverse=True)[:6]
-            
-            if premium_images:
-                for img in premium_images[:6]:
-                    st.image(img, use_container_width=True)
-                    st.caption(os.path.basename(img))
-            else:
-                st.info("No premium images yet. Generate your first one!")
-            
-            st.markdown("---")
-            st.markdown("#### 💎 API STATUS")
-            
-            if studio.flux_generator.client:
-                st.success("✅ FLUX.1 Ready")
-            else:
-                st.error("❌ No Replicate Token")
-            
-            if studio.prompt_enhancer.model:
-                st.success("✅ AI Enhancer Ready")
-            else:
-                st.warning("⚠️ No Gemini Key")
-    
-    
-    # --- TAB 2: VIDEO STUDIO (Unified Cinema + Avatar) ---
-    elif studio_tabs == "🎬 VIDEO STUDIO":
-        st.subheader("/// VIDEO PRODUCTION STUDIO")
-        st.caption("Create marketing videos: AI Avatar Spokesperson or Cinematic Animations")
-        
-        # Sub-options within Video Studio
-        video_mode = st.radio("VIDEO TYPE", ["🎭 AI Avatar Spokesperson", "🎬 Ken Burns Animation"], horizontal=True)
-        
-        if video_mode == "🎭 AI Avatar Spokesperson":
-            # HeyGen-Style Professional Interface
-            from modules.heygen_studio_ui import render_heygen_studio
-            render_heygen_studio()
-        
-        
-        else:  # Ken Burns Animation
-            st.markdown("---")
-            st.markdown("### Ken Burns Animation")
-            st.caption("Transform static images into smooth video with zoom/pan effects")
-            
-            c1, c2 = st.columns([2, 1])
-            
-            with c1:
-                source_type = st.radio("IMAGE SOURCE", ["Upload", "Select from Gallery"], horizontal=True)
-                
-                # Allow multiple image uploads
-                uploaded_files = st.file_uploader(
-                    "Upload Images (multiple allowed)", 
-                    type=['jpg', 'jpeg', 'png'],
-                    accept_multiple_files=True,
-                    key="slideshow_uploader"
-                )
-                
-                image_paths = []
-                
-                if source_type == "Upload" and uploaded_files:
-                    os.makedirs("assets/studio/uploads", exist_ok=True)
-                    cols = st.columns(min(len(uploaded_files), 4))
-                    for i, uploaded in enumerate(uploaded_files):
-                        img_path = f"assets/studio/uploads/{uploaded.name}"
-                        with open(img_path, 'wb') as f:
-                            f.write(uploaded.getbuffer())
-                        image_paths.append(img_path)
-                        with cols[i % 4]:
-                            st.image(img_path, use_container_width=True)
-                            st.caption(uploaded.name)
-                    st.success(f"{len(image_paths)} images uploaded")
-                    
-                elif source_type == "Select from Gallery":
-                    gallery_images = glob.glob("assets/studio/*.jpg") + glob.glob("assets/concepts/*.jpg") + glob.glob("assets/studio/premium/*.jpg")
-                    if gallery_images:
-                        selected_images = st.multiselect(
-                            "Select Images (1-10)", 
-                            gallery_images,
-                            max_selections=10
-                        )
-                        image_paths = selected_images
-                        if image_paths:
-                            cols = st.columns(min(len(image_paths), 4))
-                            for i, img in enumerate(image_paths):
-                                with cols[i % 4]:
-                                    st.image(img, use_container_width=True)
-                    else:
-                        st.info("No images in gallery. Generate some with Premium Generator first.")
-                
-                # Video settings
-                st.markdown("**VIDEO SETTINGS**")
-                col1, col2 = st.columns(2)
-                with col1:
-                    duration_per_image = st.slider("Seconds per image", 2, 8, 4)
-                with col2:
-                    motion = st.selectbox("Motion Effect", [
-                        "Slow zoom in",
-                        "Slow zoom out", 
-                        "Pan left to right",
-                        "Static"
-                    ])
-                
-                if image_paths and st.button("🎬 CREATE VIDEO (FREE)", type="primary", use_container_width=True):
-                    with st.spinner(f"Creating video from {len(image_paths)} images..."):
-                        from modules.free_studio import FreeVideoAnimator
-                        animator = FreeVideoAnimator()
-                        
-                        zoom_map = {
-                            "Slow zoom in": 1.15,
-                            "Slow zoom out": 0.92,
-                            "Pan left to right": 1.05,
-                            "Static": 1.0
-                        }
-                        zoom = zoom_map.get(motion, 1.1)
-                        
-                        if len(image_paths) == 1:
-                            # Single image - Ken Burns
-                            vid_path, error = animator.create_ken_burns(
-                                image_paths[0], 
-                                zoom_factor=zoom,
-                                duration=duration_per_image * 2
-                            )
-                        else:
-                            # Multiple images - Slideshow
-                            vid_path, error = animator.create_slideshow(
-                                image_paths, 
-                                slide_duration=duration_per_image
-                            )
-                        
-                        if vid_path:
-                            st.video(vid_path)
-                            st.success(f"Saved to: {vid_path}")
-                            st.download_button(
-                                "📥 Download Video",
-                                data=open(vid_path, 'rb').read(),
-                                file_name=os.path.basename(vid_path),
-                                mime="video/mp4"
-                            )
-                        else:
-                            st.error(f"Animation failed: {error}")
-            
-            with c2:
-                st.markdown("#### VIDEO LIBRARY")
-                videos = glob.glob("assets/studio/videos/*.mp4") + glob.glob("assets/videos/*.mp4")
-                videos = sorted(videos, key=os.path.getmtime, reverse=True)[:3]
-                
-                for vid in videos:
-                    st.video(vid)
-    
-
-
-
-# --- MODULE 4: CALL CENTER (UNIFIED) ---
-elif "4. CALL CENTER" in page:
+# --- MODULE X: PRODUCTION STUDIO ---
+elif "Production Studio" in page:
+    from modules.production_studio import render_production_studio
+    render_production_studio()# --- MODULE 4: AI DIALER ---
+# --- MODULE 4: AI DIALER ---
+elif "AI Dialer" in page:
     from modules.call_center_ui import render_call_center_ui
     render_call_center_ui()
 
-elif "5. OUTREACH" in page:
-    st.title("OUTREACH CAMPAIGNS")
-    st.info("Email & WhatsApp Blaster (Coming Soon)")
-
-elif "6. ANALYTICS" in page:
-    st.title("MISSION ANALYTICS")
-    from modules import visuals
-    try: visuals.render_analytics_dashboard(db.get_connection())
-    except: st.warning("Analytics module requires data.")
-
-elif "7. SETTINGS" in page:
+# --- MODULE 5: SETTINGS ---
+elif "Settings" in page:
     from modules import config_ui
     config_ui.render_config_ui()
 
-# --- MODULE 5: THE SNIPER (Placeholder) ---
+# --- MODULE 5: THE SNIPER (Placeholder - Removed) ---
 
 
 
@@ -1359,10 +1243,11 @@ elif "7. SETTINGS" in page:
 # --- LEGACY CLEANUP COMPLETE ---
 
 
-# --- MODULE: SOVEREIGN MODE ---
-elif "8. SOVEREIGN MODE" in page:
-    st.title("SOVEREIGN PROTOCOL")
-    st.markdown("### `AUTONOMOUS ACQUISITION SYSTEM`")
+# --- MODULE: ADMIN ---
+# --- MODULE 6: ADMIN ---
+elif "Admin" in page:
+    st.title("Admin Console")
+    st.caption("System Administration & Deep Analysis")
     st.markdown("---")
     
     # Session State for Sovereign
@@ -1376,7 +1261,7 @@ elif "8. SOVEREIGN MODE" in page:
     c1, c2 = st.columns([2, 1])
     
     with c1:
-        st.success("✅ STRATEGIC ANALYSIS ENGINE: Ready for Deep Research.")
+        st.success("Strategic Analysis Engine: Ready.")
         
         # --- TABBED INTERFACE ---
         mode_tab = ui.tabs(options=["1. INGEST & ANALYZE", "2. PITCH DECK REVIEW", "3. 🗄️ MISSION DATABASE"], default_value="3. 🗄️ MISSION DATABASE", key="sov_tabs")
@@ -1556,13 +1441,13 @@ elif "8. SOVEREIGN MODE" in page:
             if 'sovereign_logs' in st.session_state:
                 for log in st.session_state.sovereign_logs:
                     st.text(log)
+    
+    if mode_tab == "⚙️ Settings":
+        from modules import settings_page
+        settings_page.render_settings_page()
 
-    with c2:
-        st.markdown("#### `LIVE TELEMETRY`")
-        uic.animation_radar()
-        
-        st.metric("CPU LOAD", "12%", "+2%")
-        st.metric("NETWORK", "SECURE", "VPN ACTIVE")
-        st.metric("OPERATIONAL COST", "$0.00", "Free Protocol Active")
+    if mode_tab == "🛡️ Admin":
+        from modules import admin_page
+        admin_page.render_admin_page()
 
 

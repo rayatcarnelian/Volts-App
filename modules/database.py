@@ -7,6 +7,7 @@ DB_FILE = "volts.db"
 def get_connection():
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")  # Better concurrent read/write
     return conn
 
 def init_db():
@@ -233,11 +234,7 @@ def get_lead_by_link(link):
     conn.close()
     return res['lead_id'] if res else None
 
-# --- ALIAS FOR BACKWARD COMPATIBILITY ---
-def add_lead(name, phone=None, source="Manual", bio=None, email=None, profile_url=None, price=None, area=None, status="New", company=None, role=None, location=None, link=None):
-    # Map legacy and custom scraper arguments to V2
-    return add_lead_v2(name, phone, email, source, {}, bio, profile_url, price, area, status, company, role, location, link)
-    
+
 def get_all_leads():
     # Helper to return a flat view for the dashboard (joining tables)
     conn = get_connection()

@@ -1,70 +1,88 @@
-
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+*.pyo
 *.egg-info/
-.installed.cfg
+dist/
+build/
 *.egg
-MANIFEST
 
-# Environment Variables
-.env
-.venv
-env/
+# --- Virtual Environment ---
 venv/
-ENV/
-env.bak/
-venv.bak/
+.venv/
+env/
 
-# Project Specific
-*.log
-*.sqlite
+# --- Secrets ---
+.env
+*.env
+
+# --- Database ---
+volts.db
 *.db
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
 
-# IDE
+# --- Logs & Data ---
+call_logs.xlsx
+leads.csv
+assets/studio/
+assets/audio/
+
+# --- Chrome Profiles (Scraper) ---
+chrome_profile_*/
+
+# --- Session & Cache ---
+*.session
+*_session.json
+insta_session.json
+cookies.txt
+magic_link.txt
+user_credits.json
+
+# --- Debug Dumps ---
+ddg_*.html
+ddg_*.png
+debug_*.html
+debug_*.png
+maps_debug_*.png
+
+# --- Temp Media ---
+temp_voice.mp3
+*.mp3
+test_upload.txt
+
+# --- Large/Unnecessary ---
+venv_trash/
+backups/
+logs/
+
+# --- IDE ---
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# Project Specific / Generated
-adb_tools/
-chrome_profile_*/
-*.png
-*.jpg
-*.html
-*.csv
-*.xlsx
-*.json
-!agents.json
-!modules/agents.json
-cookies.txt
-*.session
-logs/
-temp_*.mp3
+# --- OS ---
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# --- Streamlit ---
+.streamlit/secrets.toml
+
+# --- Test/Debug Scripts (Not Needed in Production) ---
+check_*.py
+test_*.py
+debug_*.py
+fix_*.py
+verify_*.py
+analyze_*.py
 reproduce_*.py
-test_upload.txt
-debug_*.html
-ddg_*.html
-
-# Generated Assets (Exclude to save space)
-assets/generated_voice/
-assets/videos/
-assets/voice_previews/
-assets/studio/
+probe_*.py
+patch_*.py
+inspect_source.py
+link_twilio.py
+get_ddg_html.py
+go_online.py
+setup_replicate.py
+process_logo.py
+cleanup_studio.py
+auth_telegram.py
