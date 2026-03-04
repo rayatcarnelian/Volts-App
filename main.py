@@ -136,7 +136,7 @@ if not st.session_state["user"]:
                             print(f"Error loading custom keys: {e}")
                             
                         st.success("Login successful!")
-                        st.toast(f"Welcome back, {email.split('@')[0]}!", icon="")
+                        st.toast(f"Welcome back, {email.split('@')[0]}!", icon="👋")
                         time.sleep(0.5)
                         st.rerun()
                     else:
