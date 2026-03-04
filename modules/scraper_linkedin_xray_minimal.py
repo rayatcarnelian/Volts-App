@@ -1,7 +1,7 @@
 import logging
 import streamlit as st
 from modules.search_engine import engine
-from modules import database as db
+import modules.db_supabase as db
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -19,10 +19,12 @@ env/
 # --- Database ---
 volts.db
 *.db
+leads_offline.csv
 
 # --- Logs & Data ---
 call_logs.xlsx
 leads.csv
+server_debug.log
 assets/studio/
 assets/audio/
 

@@ -376,7 +376,7 @@ class AutonomousOrchestrator:
         Processes high-value leads and generates personalized content.
         Returns a report of actions taken.
         """
-        import modules.database as db
+        import modules.db_supabase as db
         
         results = []
         

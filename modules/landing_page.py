@@ -43,14 +43,14 @@ def render_landing_page():
         st.markdown("# The Ultimate AI Growth Engine")
         st.markdown('<p class="hero-sub">Automate your entire sales pipeline. Scrape leads, send AI emails, and close deals with autonomous agents.</p>', unsafe_allow_html=True)
         
-        st.markdown("### 🚀 Why Volts?")
+        st.markdown("### Why Volts?")
         fc1, fc2 = st.columns(2)
         with fc1:
-            st.info("✅ **Unlimited Lead Scraping**\n\nGoogle Maps, LinkedIn, Instagram, & more.")
-            st.info("✅ **AI Voice Agents**\n\nHuman-like cold calling & appointment setting.")
+            st.info("**Unlimited Lead Scraping**\n\nGoogle Maps, LinkedIn, Instagram, & more.")
+            st.info("**AI Voice Agents**\n\nHuman-like cold calling & appointment setting.")
         with fc2:
-            st.info("✅ **Content Studio**\n\nGenerate viral videos & posts in seconds.")
-            st.info("✅ **CRM & Pipeline**\n\nTrack every deal automatically.")
+            st.info("**Content Studio**\n\nGenerate viral videos & posts in seconds.")
+            st.info("**CRM & Pipeline**\n\nTrack every deal automatically.")
 
     # --- LOGIN / SIGNUP SECTION (Right Side) ---
     with c2:
@@ -74,7 +74,7 @@ def render_features_grid():
     with c1:
         st.markdown("""
         <div class="feature-card">
-            <div class="feature-icon">🔍</div>
+            <div class="feature-icon"></div>
             <h3>Deep Scraping</h3>
             <p>Extract thousands of targeted leads from Maps, LinkedIn, and Social Media with clean metadata.</p>
         </div>
@@ -83,7 +83,7 @@ def render_features_grid():
     with c2:
         st.markdown("""
         <div class="feature-card">
-            <div class="feature-icon">📞</div>
+            <div class="feature-icon"></div>
             <h3>AI Dialer</h3>
             <p>Deploy autonomous voice agents that call, qualify, and book meetings 24/7.</p>
         </div>
@@ -92,7 +92,7 @@ def render_features_grid():
     with c3:
         st.markdown("""
         <div class="feature-card">
-            <div class="feature-icon">🎨</div>
+            <div class="feature-icon"></div>
             <h3>Creative Studio</h3>
             <p>Create high-converting video ads and social posts using cutting-edge Generative AI.</p>
         </div>

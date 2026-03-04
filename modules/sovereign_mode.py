@@ -17,7 +17,7 @@ from modules.sales_agents import SalesAgentTeam, ContentGenerationAgent
 from modules.free_voice import FreeVoice
 from modules.scraper_insta_api import InstagramHunterAPI
 from modules.crm import LeadManager
-import modules.database as db
+import modules.db_supabase as db
 
 class SovereignAgent:
     """
@@ -76,7 +76,12 @@ class SovereignAgent:
         # Reload leads from DB to get IDs
         conn = db.get_connection()
         # Fetch the leads we just added (or recent ones)
-        recent_leads = pd.read_sql(f"SELECT * FROM leads WHERE source LIKE '%Instagram%' ORDER BY id DESC LIMIT {max_leads}", conn)
+        # Explicit Psycopg2 cursor fetch to prevent Pandas parameterization syntax errors.
+        c = conn.cursor(cursor_factory=db.RealDictCursor)
+        query = f"SELECT * FROM leads WHERE source LIKE '%%Instagram%%' ORDER BY id DESC LIMIT {max_leads}"
+        c.execute(query)
+        data = c.fetchall()
+        recent_leads = pd.DataFrame(data)
         conn.close()
         
         for idx, lead in recent_leads.iterrows():

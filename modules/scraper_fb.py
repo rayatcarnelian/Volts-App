@@ -11,7 +11,7 @@ from selenium.webdriver.support import expected_conditions as EC
 import os
 import pickle
 from dotenv import load_dotenv
-from modules import database as db
+import modules.db_supabase as db
 
 # --- SAFETY CONSTANTS ---
 MIN_DELAY = 15 
@@ -241,7 +241,7 @@ class FacebookHunter:
         except Exception as e:
             self._log(f"Netscape Load Error: {e}", "error")
 
-    def hunt_group(self, group_url, keywords=[], max_scrolls=3):
+    def hunt_group(self, group_url, keywords=[], max_scrolls=3, user_id=None):
         if not self.driver:
             self._setup_driver(headless=True) # Default start
             
@@ -412,7 +412,7 @@ class FacebookHunter:
                                 leads_count += 1
                                 st.toast(f"Found: {author_clean}", icon="⚡")
                                 # Pass profile_link and email to DB
-                                db.add_lead_v2(name=author_clean, company=email, source=f"Facebook Group ({group_url})", location="Facebook", link=profile_link, notes=text[:500], status="New")
+                                db.add_lead_v2(name=author_clean, company=email, source=f"Facebook Group ({group_url})", location="Facebook", link=profile_link, notes=text[:500], status="New", user_id=user_id)
                     except: pass
                     
             else:
@@ -467,7 +467,7 @@ class FacebookHunter:
                                 leads.append({"Source": "Facebook (Mobile)", "Name": author, "Profile": profile_link, "Context": text[:100], "Status": "New", "Email": email})
                                 leads_count += 1
                                 st.toast(f"Found: {author}", icon="⚡")
-                                db.add_lead_v2(name=author, company=email, source=f"Facebook Group ({group_url})", location="Facebook (Mobile)", link=profile_link, notes=text[:500], status="New")
+                                db.add_lead_v2(name=author, company=email, source=f"Facebook Group ({group_url})", location="Facebook (Mobile)", link=profile_link, notes=text[:500], status="New", user_id=user_id)
                             
                     except: pass
             
@@ -488,7 +488,7 @@ class FacebookHunter:
             
         return leads_count
 
-    def hunt_marketplace(self, city_url, query, limit=10):
+    def hunt_marketplace(self, city_url, query, limit=10, user_id=None):
         if not self.driver:
             self._setup_driver(headless=False) # Marketplace often needs visible mode
 
@@ -616,7 +616,8 @@ class FacebookHunter:
                             source=f"Facebook Marketplace ({query})", 
                             location=location, 
                             link=link,
-                            status="New"
+                            status="New",
+                            user_id=user_id
                         )
                         listings_found += 1
                         

@@ -8,7 +8,7 @@ import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-import modules.database as db
+import modules.db_supabase as db
 
 class IPropertyHunter:
     def __init__(self):
@@ -77,7 +77,7 @@ class IPropertyHunter:
             self._log(f"Driver Init Failed: {e}", "error")
             raise e
 
-    def hunt_listings(self, query="balcony", location="kuala-lumpur", days_back=30, limit=20):
+    def hunt_listings(self, query="balcony", location="kuala-lumpur", days_back=30, limit=20, user_id=None):
         if not self.driver:
             self._setup_driver()
 
@@ -248,8 +248,16 @@ class IPropertyHunter:
                     # 5. Store
                     context = f"Selling: {title} ({price})\nLink: {link}"
                     
-                    # db.add_lead returns True if NEW, False if DUPLICATE
-                    is_new = db.add_lead(agent_name, phone, "iProperty", context, agent_url)
+                    # Use add_lead_v2 with proper kwargs
+                    is_new = db.add_lead_v2(
+                        name=agent_name, 
+                        phone=phone, 
+                        source="iProperty", 
+                        bio=context, 
+                        link=agent_url,
+                        status="New",
+                        user_id=user_id
+                    )
                     
                     if is_new:
                         print(f"[NEW] {agent_name} | {price}")

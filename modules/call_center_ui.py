@@ -5,6 +5,8 @@ import json
 # Import VapiClient directly (Global Scope)
 from modules.vapi_client import VapiClient
 import modules.auth as auth
+import modules.db_supabase as db
+import pandas as pd
 
 def render_call_center_ui():
     """
@@ -16,8 +18,8 @@ def render_call_center_ui():
     # 0. AUTH GATEKEEPER — Must be logged in via Studio Auth
     # ================================================================
     if "user" not in st.session_state or not st.session_state.get("user"):
-        st.title("⚡ AI DIALER")
-        st.warning("🔒 Please log in via **Content Studio** first to use the AI Dialer.")
+        st.title("AI DIALER")
+        st.warning(" Please log in via **Content Studio** first to use the AI Dialer.")
         st.info("Go to sidebar → **3. Content Studio** → Login or Create Account.")
         return
     
@@ -28,7 +30,7 @@ def render_call_center_ui():
     # ================================================================
     # 1. HEADER: Usage Meter
     # ================================================================
-    st.title("⚡ TELEPHONY COMMAND")
+    st.title("TELEPHONY COMMAND")
     st.caption("Enterprise Cloud Voice • Low Latency • Vapi.ai Neural Engine")
     
     # Get call credits from DB
@@ -42,7 +44,7 @@ def render_call_center_ui():
     with h1:
         progress = min(1.0, mins_used / mins_limit) if mins_limit > 0 else 1.0
         st.progress(progress)
-        st.caption(f"📞 **{mins_remaining} min** remaining of {mins_limit} min ({tier})")
+        st.caption(f"**{mins_remaining} min** remaining of {mins_limit} min ({tier})")
     with h2:
         if tier == "FREE":
             st.markdown(f"<div style='background:#1A1708;padding:8px 12px;border-radius:8px;text-align:center;color:#C5A55A;font-weight:600;'>FREE TRIAL<br><span style='font-size:0.8rem;color:#888;'>{mins_limit} min</span></div>", unsafe_allow_html=True)
@@ -50,7 +52,7 @@ def render_call_center_ui():
             st.markdown(f"<div style='background:#064e3b;padding:8px 12px;border-radius:8px;text-align:center;color:#6ee7b7;font-weight:600;'>{tier} PLAN<br><span style='font-size:0.8rem;color:#888;'>{mins_limit} min/mo</span></div>", unsafe_allow_html=True)
     with h3:
         if tier == "FREE":
-            if st.button("⚡ Upgrade ($15/mo → 100 min)"):
+            if st.button("Upgrade ($15/mo → 100 min)"):
                 st.session_state["user"]["tier"] = "PRICING_VIEW"
                 st.rerun()
     
@@ -60,17 +62,17 @@ def render_call_center_ui():
     # 2. MINUTE CHECK — Block if exhausted
     # ================================================================
     if mins_remaining <= 0:
-        st.error("❌ OUT OF MINUTES")
+        st.error("OUT OF MINUTES")
         if tier == "FREE":
             st.markdown("""
                 <div style='background:linear-gradient(135deg,#1A1708,#000);padding:2rem;border-radius:15px;border:1px solid #3D3520;text-align:center;margin:1rem 0;'>
                     <h3 style='color:#C5A55A;'>Your 2-Minute Free Trial Has Ended</h3>
                     <p style='color:#999;'>Upgrade to PRO for <b>100 minutes</b> of AI calling per month.</p>
                     <h2 style='color:white;'>$15<span style='font-size:1rem;color:#666;'>/month</span></h2>
-                    <p style='color:#6ee7b7;'>✅ 100 AI call minutes &nbsp;•&nbsp; ✅ All voices &nbsp;•&nbsp; ✅ Transcripts</p>
+                    <p style='color:#6ee7b7;'>100 AI call minutes &nbsp;•&nbsp; All voices &nbsp;•&nbsp; Transcripts</p>
                 </div>
             """, unsafe_allow_html=True)
-            if st.button("⚡ Upgrade to PRO", type="primary", use_container_width=True):
+            if st.button("Upgrade to PRO", type="primary", use_container_width=True):
                 st.session_state["user"]["tier"] = "PRICING_VIEW"
                 st.rerun()
         else:
@@ -84,7 +86,7 @@ def render_call_center_ui():
     phone_id = os.getenv("VAPI_PHONE_ID", "")
     
     if not api_key or not phone_id:
-        st.error("❌ CLOUD CREDENTIALS MISSING")
+        st.error("CLOUD CREDENTIALS MISSING")
         st.info("Go to **SETTINGS** -> **Cloud Voice** to configure your Vapi Keys.")
         st.code(f"Key Present: {bool(api_key)}\nID Present: {bool(phone_id)}")
         return
@@ -92,20 +94,51 @@ def render_call_center_ui():
     # --- MAIN INTERFACE ---
     client = VapiClient(api_key)
     
-    # --- TABS: DIALER vs DATABASE vs LEADS ---
-    tab_dialer, tab_leads, tab_db = st.tabs(["🚀 DIALER", "📂 LEAD LIST", "🗄️ DATABASE"])
+    # --- TABS: DIALER vs AUTO-PILOT vs DATABASE ---
+    tab_dialer, tab_auto, tab_db = st.tabs(["🎯 MANUAL DIAL", "🤖 AUTO-PILOT", "📊 DATABASE"])
 
     # --- TAB 1: DIALER ---
     with tab_dialer:
-        st.success(f"✅ CLOUD VOICE ACTIVE | ⏱️ {mins_remaining} min remaining")
+        st.success(f"CLOUD VOICE ACTIVE | ⏱️ {mins_remaining} min remaining")
         
         c1, c2 = st.columns([1, 1], gap="large")
 
         with c1:
-            st.subheader("📡 OUTBOUND LINK")
+            st.subheader(" OUTBOUND LINK")
             
-            # Target Input
-            target_ph = st.text_input("TARGET NUMBER", placeholder="+60123456789", help="E.164 Format advised")
+            # --- DYNAMIC CRM INJECTION (RAG) ---
+            dial_mode = st.radio("Target Source", ["Manual Number", "CRM Lead"], horizontal=True)
+            
+            target_ph = ""
+            lead_context = ""
+            
+            if dial_mode == "Manual Number":
+                target_ph = st.text_input("TARGET NUMBER", placeholder="+60123456789", help="E.164 Format advised")
+            else:
+                leads_df = db.get_all_leads(user_id)
+                # Filter leads with phone numbers
+                leads_df = leads_df[leads_df['phone'].notna() & (leads_df['phone'] != '')]
+                
+                if leads_df.empty:
+                    st.warning("No leads with phone numbers found in your CRM.")
+                else:
+                    # Create a display format
+                    leads_list = leads_df.apply(lambda row: f"{row['name']} ({row['phone']}) - ID: {row['id']}", axis=1).tolist()
+                    selected_lead_str = st.selectbox("Select Lead to Dial", leads_list)
+                    
+                    if selected_lead_str:
+                        lead_id = int(selected_lead_str.split("ID: ")[1])
+                        lead_row = leads_df[leads_df['id'] == lead_id].iloc[0]
+                        target_ph = lead_row['phone']
+                        
+                        # Build Lead Context for AI Prompt
+                        st.info(f"⚡ RAG Linked: Injecting data for **{lead_row['name']}** into AI Brain.")
+                        lead_context = f"\n\n--- LEAD CONTEXT (READ THIS BEFORE CALLING) ---\n"
+                        lead_context += f"Prospect Name: {lead_row['name']}\n"
+                        if pd.notna(lead_row.get('bio')): lead_context += f"Profile/Bio: {lead_row['bio']}\n"
+                        if pd.notna(lead_row.get('pain_points')): lead_context += f"Known Pain Points: {lead_row['pain_points']}\n"
+                        if pd.notna(lead_row.get('ice_breaker')): lead_context += f"Suggested Icebreaker: {lead_row.get('ice_breaker')}\n"
+                        if pd.notna(lead_row.get('notes')): lead_context += f"CRM Notes: {lead_row['notes']}\n"
             
             # --- AGENT COMMAND CENTER ---
             
@@ -118,7 +151,7 @@ def render_call_center_ui():
             with open(AGENTS_FILE, "r") as f:
                 known_agents = json.load(f)
                 
-            st.markdown("#### 🧠 AGENT NEURAL CORE")
+            st.markdown("####  AGENT NEURAL CORE")
             
             # Selection
             agent_names = list(known_agents.keys())
@@ -130,7 +163,7 @@ def render_call_center_ui():
                 agent_data = {"prompt": agent_data, "voice_id": "burt", "first_message": "Hello?"}
 
             # Training / Editing Area
-            with st.expander("🎓 TRAIN / EDIT AGENT", expanded=False):
+            with st.expander(" TRAIN / EDIT AGENT", expanded=False):
                 edit_name = st.text_input("Name", value=selected_agent_name)
                 
                 # Voice Library with PREVIEW URLs
@@ -186,7 +219,7 @@ def render_call_center_ui():
                 edit_first = st.text_input("First Message (Fixes Silence)", value=agent_data.get("first_message", "Hello?"))
                 edit_prompt = st.text_area("Neural Instructions", value=agent_data.get("prompt", ""), height=200)
                 
-                if st.button("💾 SAVE AGENT"):
+                if st.button(" SAVE AGENT"):
                     known_agents[edit_name] = {
                         "prompt": edit_prompt,
                         "voice_id": new_id,
@@ -205,7 +238,7 @@ def render_call_center_ui():
             # DIAL BUTTON
             dial_col_1, dial_col_2 = st.columns([2, 1])
             with dial_col_1:
-                if st.button("🚀 INITIATE CALL", type="primary", use_container_width=True):
+                if st.button("INITIATE CALL", type="primary", use_container_width=True):
                      if not target_ph:
                          st.error("Enter a Target Number.")
                      else:
@@ -213,7 +246,7 @@ def render_call_center_ui():
                          # PRE-CALL CHECK: Do they have minutes?
                          # ============================================
                          if not auth.can_make_call(user_id):
-                             st.error("❌ Out of minutes! Upgrade to continue.")
+                             st.error("Out of minutes! Upgrade to continue.")
                              st.stop()
                          
                          # Smart Formatting (E.164)
@@ -231,7 +264,7 @@ def render_call_center_ui():
                          elif raw.startswith("0"):
                              formatted_ph = "+60" + raw[1:]
                          else:
-                             st.warning(f"⚠️ Please use E.164 format: +[country code][number].")
+                             st.warning(f"Please use E.164 format: +[country code][number].")
                              formatted_ph = raw
                               
                          st.caption(f"Dialing: {formatted_ph}...")
@@ -239,10 +272,24 @@ def render_call_center_ui():
                          # Record start time for duration tracking
                          call_start_time = time.time()
                          
+                         # ============================================
+                         # PHASE 6: MASTER SALESMAN + DYNAMIC RAG INJECTION
+                         # ============================================
+                         master_salesman_framework = """
+\n\n--- ELITE SALES FRAMEWORK (MANDATORY RULES) ---
+1. THE ONE QUESTION RULE: You MUST speak in short, concise bursts. NEVER talk for more than 15 seconds at a time. EVERY SINGLE TIME you stop talking, you MUST end with a question to pass the microphone back to the prospect.
+2. VALUE-FIRST APPROACH: NEVER say "How are you today?" or "Did I catch you at a bad time?". Be direct, confident, and immediately state the value you provide or the specific pain point you are calling to solve.
+3. OBJECTION HANDLING: 
+  - If they say "I'm not interested": Use a pattern interrupt. Say "I completely understand, and honestly I figured you'd say that since I called out of the blue. But if I could show you how we solved [mention a pain point or value proposition], would you give me 30 seconds?"
+  - If they say "Send me an email": Use Feel-Felt-Found. Say "I can absolutely do that. Just so I make sure I send you the most relevant information, what is your biggest challenge with [industry/topic] right now?"
+4. NATURAL PACING: Use natural filler words like "hmm", "yeah", "I see" occasionally. Pause for a split second before answering so it feels like a real human conversation.
+"""
+                         final_prompt = agent_data.get("prompt", "") + master_salesman_framework + lead_context
+                         
                          with st.spinner("Establishing Neural Uplink..."):
                              res = client.start_call(
                                  formatted_ph, 
-                                 prompt_override=agent_data.get("prompt"), 
+                                 prompt_override=final_prompt, 
                                  first_message=agent_data.get("first_message"),
                                  voice_id=agent_data.get("voice_id"),
                                  phone_id=phone_id
@@ -251,15 +298,15 @@ def render_call_center_ui():
                              if "error" in res:
                                  st.error(f"Uplink Failed: {res['error']}")
                              else:
-                                 st.success("✅ SIGNAL LOCKED. CALLING...")
-                                 st.toast("AI Agent Dispatched!", icon="🛰️")
+                                 st.success("SIGNAL LOCKED. CALLING...")
+                                 st.toast("AI Agent Dispatched!")
                                  
                                  # Store call ID for tracking
                                  st.session_state["active_call_id"] = res.get("id")
                                  st.session_state["call_start_time"] = call_start_time
                                  
                                  # Display Call Info
-                                 with st.expander("📝 CONNECTION LOG", expanded=True):
+                                 with st.expander("CONNECTION LOG", expanded=True):
                                      st.json(res)
                                      st.caption(f"Call ID: {res.get('id')}")
                                      st.info("⏱️ Minutes will be deducted when the call ends. Click 'Sync Minutes' to update.")
@@ -268,13 +315,13 @@ def render_call_center_ui():
             # POST-CALL: Sync Minutes Button
             # ============================================
             st.markdown("---")
-            if st.button("🔄 Sync Minutes (After Call Ends)", use_container_width=True):
+            if st.button(" Sync Minutes (After Call Ends)", use_container_width=True):
                 with st.spinner("Fetching call duration from Vapi..."):
                     _sync_call_minutes(client, user_id)
                     st.rerun()
 
         with c2:
-            st.subheader("📊 LIVE TELEMETRY")
+            st.subheader("LIVE TELEMETRY")
             
             # --- CACHED DATA FETCHING ---
             @st.cache_data(ttl=30, show_spinner=False)
@@ -288,7 +335,7 @@ def render_call_center_ui():
             col_h1, col_h2 = st.columns([2, 1])
             col_h1.info("Fetching recent transmissions...")
             
-            if col_h2.button("💾 SYNC DB"):
+            if col_h2.button(" SYNC DB"):
                 with st.spinner("Downloading Transcripts..."):
                     from modules.call_logger import CallLogger
                     full_history = client.get_calls(limit=50)
@@ -309,7 +356,7 @@ def render_call_center_ui():
                          ended_reason = call.get('endedReason', '-')
                          duration = call.get('duration', 0) # seconds
                          
-                         icon = "🟢" if status == "in-progress" else "🔴" if status == "ended" else "🟡"
+                         icon = "" if status == "in-progress" else "" if status == "ended" else ""
                          
                          with st.container(border=True):
                              h_c1, h_c2 = st.columns([3, 1])
@@ -328,67 +375,60 @@ def render_call_center_ui():
                 st.warning(f"Telemetry Offline: {e}")
     
         # --- ADVANCED / DEBUG ---
-        with st.expander("🛠️ DEBUG TOOLS", expanded=False):
+        with st.expander("DEBUG TOOLS", expanded=False):
             st.text("Vapi Phone ID: " + phone_id)
             if st.button("Ping Vapi Server"):
                 st.write(client.get_calls(1))
 
-    # --- TAB 2: LEAD LIST ---
-    with tab_leads:
-        st.subheader("📂 Uploaded Leads")
-        st.caption("Edit `leads.csv` to add your targets.")
+    # --- TAB 2: AUTO-PILOT CAMPAIGN ---
+    with tab_auto:
+        st.subheader("Autonomous AI Agency Pipeline")
+        st.caption("Let the Google Gemini Brain research your leads, write custom pitches, and sequentially dial them through Vapi.")
         
-        leads_file = "leads.csv"
-        if os.path.exists(leads_file):
-            import pandas as pd
-            df_leads = pd.read_csv(leads_file)
+        st.markdown("""
+        <div style='background:#1a1708; border:1px solid #c5a55a; padding:15px; border-radius:8px; margin-bottom:20px;'>
+            <h4 style='color:#c5a55a; margin-top:0;'>Zero Bullshit Mode</h4>
+            <p style='color:#ccc; font-size:14px;'>
+                1. <b>Scans</b> Supabase for leads marked as 'New'.<br>
+                2. <b>Researches</b> their bio using Google Gemini to write a personalized Ice-Breaker.<br>
+                3. <b>Dials</b> them via Vapi and injects the Ice-Breaker into the opening line.<br>
+                4. <b>Updates</b> the CRM automatically to 'Contacted'.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            max_dials = st.slider("Maximum Leads to Call", min_value=1, max_value=50, value=5)
             
-            # Interactive Table
-            st.data_editor(df_leads, num_rows="dynamic", use_container_width=True, key="leads_editor")
-            
-            st.markdown("### ⚡ Quick Actions")
-            
-            # Selector for Calling
-            lead_names = df_leads["Name"] + " (" + df_leads["Phone"].astype(str) + ")"
-            selected_lead = st.selectbox("Select Lead to Call", lead_names)
-            
-            if st.button("📞 CALL SELECTED LEAD", type="primary"):
-                # Pre-call minute check
-                if not auth.can_make_call(user_id):
-                    st.error("❌ Out of minutes! Upgrade to continue.")
+        with c2:
+            st.write("")
+            st.write("")
+            if st.button("🚀 LAUNCH DAILY CAMPAIGN", type="primary", use_container_width=True):
+                with st.status("Initiating Autonomous Protocol...", expanded=True) as status:
+                    st.write("Waking up Gemini Brain...")
+                    import modules.ai_manager as ai
+                    st.write("Querying Supabase database...")
+                    calls_made = ai.run_daily_campaign(user_id=user_id, max_leads=max_dials)
+                    status.update(label=f"Campaign Complete. Dispatched {calls_made} calls.", state="complete", expanded=False)
+                
+                if calls_made > 0:
+                    st.success(f"Successfully ran autonomous campaign for {calls_made} leads.")
                 else:
-                    phone_to_call = selected_lead.split("(")[-1].strip(")")
-                    st.info(f"Initiating call to {phone_to_call}...")
-                    
-                    res = client.start_call(
-                        phone_to_call, 
-                        prompt_override=known_agents[selected_agent_name].get("prompt") if isinstance(known_agents[selected_agent_name], dict) else known_agents[selected_agent_name],
-                        first_message=known_agents[selected_agent_name].get("first_message", "Hello?") if isinstance(known_agents[selected_agent_name], dict) else "Hello?",
-                        voice_id=known_agents[selected_agent_name].get("voice_id", "burt") if isinstance(known_agents[selected_agent_name], dict) else "burt",
-                        phone_id=phone_id
-                    )
-                    if "error" in res:
-                        st.error(res["error"])
-                    else:
-                        st.success("Connected!")
-                        st.session_state["active_call_id"] = res.get("id")
-                        st.session_state["call_start_time"] = time.time()
-                        time.sleep(1)
-        else:
-            st.warning("No `leads.csv` found. Create one with columns: Name, Phone.")
+                    st.warning("No 'New' leads with phone numbers found in the CRM.")
 
     # --- TAB 3: DATABASE VIEW ---
     with tab_db:
-        st.subheader("🗄️ CALL TRANSCRIPT DATABASE")
+        st.subheader("CALL TRANSCRIPT DATABASE")
         st.caption("View and Analyze previous interactions.")
         
         # Usage Summary
         st.markdown(f"""
             <div style='background:#111;padding:1rem;border-radius:10px;border:1px solid #333;margin-bottom:1rem;'>
-                <b style='color:#C5A55A;'>📊 This Month's Usage</b><br>
+                <b style='color:#C5A55A;'>This Month's Usage</b><br>
                 <span style='color:#eee;font-size:1.5rem;font-weight:700;'>{mins_used} min</span>
                 <span style='color:#666;'> / {mins_limit} min</span>
-                <br><span style='color:#6ee7b7;'>💰 Your cost: ~${mins_used * 0.08:.2f}</span>
+                <br><span style='color:#6ee7b7;'> Your cost: ~${mins_used * 0.08:.2f}</span>
             </div>
         """, unsafe_allow_html=True)
         
@@ -406,14 +446,14 @@ def render_call_center_ui():
             # Data Table
             st.dataframe(df, use_container_width=True)
             
-            st.markdown("### 📜 Transcript Viewer")
+            st.markdown("###  Transcript Viewer")
             selected_id = st.selectbox("Select Call ID to Read Transcript", df['Call ID'].unique())
             
             if selected_id:
                 row = df[df['Call ID'] == selected_id].iloc[0]
                 st.text_area("Full Transcript", value=row.get('Transcript', 'No Transcript Available'), height=400)
         else:
-            st.warning("No Database Found. Go to the **Dialer** tab and click **'💾 SYNC DB'** to create it.")
+            st.warning("No Database Found. Go to the **Dialer** tab and click **' SYNC DB'** to create it.")
 
 
 def _sync_call_minutes(client, user_id):
@@ -462,7 +502,7 @@ def _sync_call_minutes(client, user_id):
         
         if total_new_minutes > 0:
             auth.deduct_call_minutes(user_id, total_new_minutes)
-            st.success(f"✅ Synced {new_calls} call(s). Deducted {round(total_new_minutes, 1)} minutes.")
+            st.success(f"Synced {new_calls} call(s). Deducted {round(total_new_minutes, 1)} minutes.")
         else:
             st.info("No new completed calls to sync.")
             

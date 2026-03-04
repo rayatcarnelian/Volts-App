@@ -8,7 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from modules import database as db
+import modules.db_supabase as db
 import sys
 
 # --- ENCODING FIX FOR WINDOWS ---

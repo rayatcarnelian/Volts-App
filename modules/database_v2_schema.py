@@ -130,6 +130,12 @@ def init_db():
         c.execute("ALTER TABLE leads ADD COLUMN score_factors TEXT")
     except: pass
 
+    # --- MIGRATION: Leads user_id (Data Isolation) ---
+    try:
+        c.execute("ALTER TABLE leads ADD COLUMN user_id INTEGER")
+    except:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -137,16 +143,21 @@ def init_db():
 # We will keep the old 'add_lead' function momentarily to avoid breaking the app,
 # but internally it should route to the new tables.
 
-def get_all_leads():
-    """Returns all leads as a pandas DataFrame."""
+def get_all_leads(user_id=None):
+    """Returns all leads as a pandas DataFrame, filtered by user_id."""
     conn = get_connection()
     try:
-        df = pd.read_sql("SELECT * FROM leads ORDER BY id DESC", conn)
+        query = "SELECT * FROM leads"
+        params = ()
+        if user_id:
+            query += " WHERE user_id = ?"
+            params = (user_id,)
+        query += " ORDER BY id DESC"
+        df = pd.read_sql(query, conn, params=params)
         # Ensure expected columns exist even if empty
         for col in ['name', 'primary_email', 'primary_phone', 'master_status', 'total_score', 'source', 'status']:
             if col not in df.columns:
                 df[col] = ''
-        # Alias for backward compatibility
         if 'master_status' in df.columns and 'status' not in df.columns:
             df['status'] = df['master_status']
         elif 'status' not in df.columns:
@@ -160,42 +171,44 @@ def get_all_leads():
     finally:
         conn.close()
 
-def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}):
+def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}, user_id=None):
     """
     Unified entry point for V2.
     metadata: dict containing platform specific fields (e.g. {'linkedin': {...}})
+    user_id: ID of the logged-in user who owns this lead.
     """
     conn = get_connection()
     c = conn.cursor()
     
-    # 1. Check if Lead exists (by Email or Phone or Name)
-    # Simple dedupe for now
+    # 1. Check if Lead exists FOR THIS USER (by Email or Phone or Name)
     lead_id = None
+    
+    user_filter = "AND user_id = ?" if user_id else "AND user_id IS NULL"
+    user_param = (user_id,) if user_id else ()
     
     # Check Phone
     if phone:
-        c.execute("SELECT id FROM leads WHERE primary_phone = ?", (phone,))
+        c.execute(f"SELECT id FROM leads WHERE primary_phone = ? {user_filter}", (phone,) + user_param)
         res = c.fetchone()
         if res: lead_id = res['id']
             
     # Check Name (Fallback)
     if not lead_id and name:
-         c.execute("SELECT id FROM leads WHERE name = ?", (name,))
+         c.execute(f"SELECT id FROM leads WHERE name = ? {user_filter}", (name,) + user_param)
          res = c.fetchone()
          if res: lead_id = res['id']
     
     created_new = False
     if not lead_id:
         c.execute('''
-            INSERT INTO leads (name, primary_phone, primary_email, created_at)
-            VALUES (?, ?, ?, ?)
-        ''', (name, phone, email, datetime.date.today()))
+            INSERT INTO leads (name, primary_phone, primary_email, created_at, user_id)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (name, phone, email, datetime.date.today(), user_id))
         lead_id = c.lastrowid
         created_new = True
         
     # 2. Insert into specialized table based on Source
     if source == "LinkedIn X-Ray":
-        # Check if profile exists
         c.execute("SELECT id FROM linkedin_profiles WHERE lead_id = ?", (lead_id,))
         if not c.fetchone():
             c.execute('''
@@ -210,8 +223,6 @@ def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}):
                 INSERT INTO instagram_profiles (lead_id, username, bio_text, profile_url, scraped_at)
                 VALUES (?, ?, ?, ?, ?)
             ''', (lead_id, metadata.get('username'), metadata.get('bio'), metadata.get('profile_url'), datetime.datetime.now()))
-            
-    # ... handle others ...
 
     conn.commit()
     conn.close()

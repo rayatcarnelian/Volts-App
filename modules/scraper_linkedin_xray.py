@@ -1,7 +1,7 @@
 import logging
 import streamlit as st
 from modules.search_engine import engine
-from modules import database as db
+import modules.db_supabase as db
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -12,7 +12,7 @@ class LinkedInXRay:
     Enterprise-grade LinkedIn X-Ray scraper using multi-provider Hybrid Engine.
     """
     
-    def hunt_targets(self, role="Property Developer", location="Kuala Lumpur", limit=10):
+    def hunt_targets(self, role="Property Developer", location="Kuala Lumpur", limit=10, user_id=None):
         """
         Main entry point for hunting leads via search engines.
         """
@@ -41,7 +41,7 @@ class LinkedInXRay:
                     continue
                 
                 # Check for duplicates
-                if db.get_lead_by_link(link):
+                if db.get_lead_by_link(link, user_id=user_id):
                     continue
                 
                 # Extract clean name from title (e.g., "John Doe - Property Developer | LinkedIn")
@@ -57,7 +57,8 @@ class LinkedInXRay:
                     location=location,
                     link=link,
                     source="LinkedIn X-Ray",
-                    bio=snippet
+                    bio=snippet,
+                    user_id=user_id
                 )
                 
                 if success:

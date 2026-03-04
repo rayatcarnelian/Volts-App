@@ -1,9 +1,9 @@
 import requests
 from bs4 import BeautifulSoup
-import sqlite3
 import json
 from modules.ai_engine import AIGhostwriter
-import modules.database as db
+import modules.db_supabase as db
+from psycopg2.extras import RealDictCursor
 import urllib3
 import time
 
@@ -99,64 +99,23 @@ class ResearchAgent:
     def research_lead(self, lead_id):
         """Researches a specific lead from the DB and updates it."""
         conn = db.get_connection()
-        conn.row_factory = sqlite3.Row
-        
-        # valid columns are checked in database.py
-        lead = conn.execute("SELECT * FROM leads WHERE id = ?", (lead_id,)).fetchone()
-        
-        if not lead:
-            conn.close()
+        if not conn:
+            print("[OFFLINE] Cannot research — Supabase is unreachable.")
             return False
+        
+        try:    
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-        # Get URL from lead or profiles
-        url = None
-        # Try to find a website URL. 
-        # Often profile_url is social media (LinkedIn/Insta). 
-        # We need the COMPANY website ideally.
-        # But for now, we'll try to use whatever link we have, or Google Search (Future).
-        # Let's assume input might be in 'notes' or we check linkedin_profiles table for website if we scraped it.
-        # For this v1, we will use the profile_url if it looks like a website, or search for it.
-        
-        # Simple Logic: If profile_url is NOT linkedin/instagram/facebook, use it.
-        raw_url = lead['source'] # Sometimes source is domain? No.
-        
-        # Look in profiles
-        # We need to JOIN queries or just simple heuristic
-        # Let's use the 'profile_url' column if it exists in the unified view
-        # or grab from the linked tables.
-        
-        # Actually, let's look at the lead record.
-        # We did not add a `website_url` column. We usually use `profile_url`.
-        # If `profile_url` is a social link, we might want to visit that too (LinkedIn Public Profile).
-        
-        target_url = None
-        
-        # Check LinkedIn/Insta tables for external links? 
-        # For simplicity V1: We will analyze the available text (Bio) + Source.
-        # If we want to scrape, we need a URL.
-        
-        # FUTURE: Use Google Search to find website.
-        # For now, we will perform "Deep Analysis" on the TEXT we already have (Bio/Notes) 
-        # PLUS try to visit the profile_url if it's actionable.
-        
-        # Let's fetch the Aggregated Data like in main.py
-        q = """
-             SELECT 
-                l.name, 
-                COALESCE(li.headline, i.bio_text, pa.specialty_area) as bio,
-                COALESCE(li.profile_url, i.profile_url, pa.profile_url) as url
-             FROM leads l
-             LEFT JOIN linkedin_profiles li ON l.id = li.lead_id
-             LEFT JOIN instagram_profiles i ON l.id = i.lead_id
-             LEFT JOIN property_agents pa ON l.id = pa.lead_id
-             WHERE l.id = ?
-        """
-        data = conn.execute(q, (lead_id,)).fetchone()
-        
-        if data:
-            name = data['name']
-            bio = data['bio']
-            url = data['url']
+            # Fetch lead from the flat V2 leads table
+            cursor.execute("SELECT id, name, bio, notes, source, website FROM leads WHERE id = %s", (lead_id,))
+            lead = cursor.fetchone()
+            
+            if not lead:
+                return False
+            
+            name = lead.get('name', 'Unknown')
+            bio = lead.get('bio') or lead.get('notes') or ''
+            url = lead.get('website')
             
             print(f"Researching {name}...")
             
@@ -164,7 +123,6 @@ class ResearchAgent:
             result = self.analyze_company(name, url, bio)
             
             if result:
-                # SAFE BINDING: Ensure all params are strings
                 s_sum = result.get('summary', '')
                 s_ice = result.get('ice_breaker', '')
                 
@@ -175,25 +133,55 @@ class ResearchAgent:
                 elif isinstance(p_points, dict):
                     p_points = json.dumps(p_points)
                 
-                # Update DB
-                conn.execute("""
+                # Update lead in Supabase — store research in notes/ice_breaker/pain_points
+                cursor.execute("""
                     UPDATE leads 
-                    SET website_summary = ?, 
-                        ice_breaker = ?, 
-                        pain_points = ?,
-                        research_status = 'Done',
-                        total_score = total_score + 10 -- Bonus for Enrichment
-                    WHERE id = ?
+                    SET notes = %s, 
+                        ice_breaker = %s, 
+                        pain_points = %s,
+                        score = COALESCE(score, 0) + 10
+                    WHERE id = %s
                 """, (s_sum, s_ice, p_points, lead_id))
                 conn.commit()
-                conn.close()
                 return True
+            
+            return False
                 
-        conn.close()
-        return False
+        except Exception as e:
+            print(f"Research error: {e}")
+            if conn:
+                conn.rollback()
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    def get_pending_leads(self, limit=5, user_id=None):
+        """Gets leads that haven't been researched yet (no ice_breaker)."""
+        conn = db.get_connection()
+        if not conn:
+            return []
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            if user_id:
+                cursor.execute("""
+                    SELECT id, name FROM leads 
+                    WHERE (ice_breaker IS NULL OR ice_breaker = '') 
+                    AND user_id = %s
+                    ORDER BY id DESC LIMIT %s
+                """, (user_id, limit))
+            else:
+                cursor.execute("""
+                    SELECT id, name FROM leads 
+                    WHERE ice_breaker IS NULL OR ice_breaker = ''
+                    ORDER BY id DESC LIMIT %s
+                """, (limit,))
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"Error fetching pending leads: {e}")
+            return []
+        finally:
+            conn.close()
 
 if __name__ == "__main__":
-    # Test
     agent = ResearchAgent()
-    # Mock Research
-    # print(agent.analyze_company("Volts Design", "https://volts.design"))

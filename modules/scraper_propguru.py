@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from modules import database as db
+import modules.db_supabase as db
 
 # --- SAFETY CONSTANTS ---
 MIN_DELAY = 10
@@ -112,7 +112,7 @@ class PropGuruHunter:
         
         return base_url
 
-    def hunt_listings(self, query="Balcony", location="kuala-lumpur", limit=30):
+    def hunt_listings(self, query="Balcony", location="kuala-lumpur", limit=30, user_id=None):
         """
         Scrapes property listings for agent contacts.
         Autogenerates URL based on query/loc.
@@ -211,14 +211,16 @@ class PropGuruHunter:
                         
                         # Save if we found something useful
                         # We save even without phone if we have a profile link, but here we prioritize phone/name
-                        success = db.add_lead(
+                        success = db.add_lead_v2(
                             name=agent_name,
                             phone=phone,
                             source="PropertyGuru",
                             bio=f"Listing: {title}\nLink: {link}",
                             profile_url=link,
                             price=price,
-                            area=area
+                            area=area,
+                            status="New",
+                            user_id=user_id
                         )
                         
                         if success:

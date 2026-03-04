@@ -66,6 +66,9 @@ def init_db():
     try:
         c.execute("ALTER TABLE leads ADD COLUMN website TEXT")
     except: pass
+    try:
+        c.execute("ALTER TABLE leads ADD COLUMN user_id INTEGER")
+    except: pass
     
     # --- V2 RESEARCH COLUMNS (Clay-Mode) ---
     try:
@@ -129,6 +132,18 @@ def init_db():
         )
     ''')
     
+    # 5. STUDIO ASSETS (Gallery for Content Studio)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS studio_assets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            asset_type TEXT, -- 'image' or 'video'
+            asset_url TEXT,
+            prompt TEXT,
+            created_at DATETIME
+        )
+    ''')
+    
     # 5. CAMPAIGNS (Preserve existing functionality)
     c.execute('''
         CREATE TABLE IF NOT EXISTS campaigns (
@@ -145,10 +160,11 @@ def init_db():
 
 # --- V2 LOGIC ---
 
-def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}, bio=None, profile_url=None, price=None, area=None, status="New", company=None, role=None, location=None, link=None):
+def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}, bio=None, profile_url=None, price=None, area=None, status="New", company=None, role=None, location=None, link=None, user_id=None):
     """
     Unified entry point for V2.
     Enhanced signature to support legacy and scraper calls.
+    user_id: ID of the logged-in user who owns this lead.
     """
     conn = get_connection()
     c = conn.cursor()
@@ -157,24 +173,28 @@ def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}, bio=
     if link and not profile_url:
         profile_url = link
 
-    # 1. Check if Lead exists (by Email or Phone or Name or Link)
+    # 1. Check if Lead exists FOR THIS USER (by Email or Phone or Name or Link)
     lead_id = None
+    
+    # Build user filter
+    user_filter = "AND l.user_id = ?" if user_id else "AND l.user_id IS NULL"
+    user_param = (user_id,) if user_id else ()
     
     # Check Link/URL if provided
     if profile_url:
-        c.execute("SELECT lead_id FROM linkedin_profiles WHERE profile_url = ?", (profile_url,))
+        c.execute(f"SELECT lp.lead_id FROM linkedin_profiles lp JOIN leads l ON lp.lead_id = l.id WHERE lp.profile_url = ? {user_filter}", (profile_url,) + user_param)
         res = c.fetchone()
         if res: lead_id = res['lead_id']
 
     # Check Phone
     if not lead_id and phone:
-        c.execute("SELECT id FROM leads WHERE primary_phone = ?", (phone,))
+        c.execute(f"SELECT id FROM leads WHERE primary_phone = ? {user_filter.replace('l.', '')}", (phone,) + user_param)
         res = c.fetchone()
         if res: lead_id = res['id']
             
     # Check Name (Fallback)
     if not lead_id and name:
-         c.execute("SELECT id FROM leads WHERE name = ?", (name,))
+         c.execute(f"SELECT id FROM leads WHERE name = ? {user_filter.replace('l.', '')}", (name,) + user_param)
          res = c.fetchone()
          if res: lead_id = res['id']
     
@@ -186,9 +206,9 @@ def add_lead_v2(name, phone=None, email=None, source="Manual", metadata={}, bio=
         d_lon = 101.699 + random.uniform(-0.05, 0.05)
         
         c.execute('''
-            INSERT INTO leads (name, primary_phone, primary_email, created_at, master_status, lat, lon, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (name, phone, email, datetime.date.today(), status, d_lat, d_lon, source))
+            INSERT INTO leads (name, primary_phone, primary_email, created_at, master_status, lat, lon, source, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (name, phone, email, datetime.date.today(), status, d_lat, d_lon, source, user_id))
         lead_id = c.lastrowid
         created_new = True
         
@@ -235,10 +255,9 @@ def get_lead_by_link(link):
     return res['lead_id'] if res else None
 
 
-def get_all_leads():
-    # Helper to return a flat view for the dashboard (joining tables)
+def get_all_leads(user_id=None):
+    """Returns a flat view of leads filtered by user_id."""
     conn = get_connection()
-    # Left join to get info and derive Source
     query = '''
     SELECT 
         l.id, l.name, l.primary_email as email, l.primary_phone as phone, l.master_status as status,
@@ -254,7 +273,6 @@ def get_all_leads():
             WHEN li.id IS NOT NULL THEN 'LinkedIn X-Ray'
             WHEN i.id IS NOT NULL THEN 'Instagram'
             WHEN pa.id IS NOT NULL THEN pa.source_portal
-            WHEN pa.id IS NOT NULL THEN pa.source_portal
             ELSE 'Manual' 
         END as source,
         l.website_summary, l.ice_breaker, l.pain_points, l.research_status
@@ -263,11 +281,41 @@ def get_all_leads():
     LEFT JOIN instagram_profiles i ON l.id = i.lead_id
     LEFT JOIN property_agents pa ON l.id = pa.lead_id
     '''
-    df = pd.read_sql_query(query, conn)
+    if user_id:
+        query += " WHERE l.user_id = ?"
+        df = pd.read_sql_query(query, conn, params=(user_id,))
+    else:
+        df = pd.read_sql_query(query, conn)
     conn.close()
     return df
 
-def create_campaign(source, search_term):
+# --- STUDIO ASSETS LOGIC ---
+
+def save_studio_asset(user_id, asset_type, asset_url, prompt):
+    """Save an image or video URL generated by the Studio into the local database gallery."""
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO studio_assets (user_id, asset_type, asset_url, prompt, created_at) VALUES (?, ?, ?, ?, ?)", 
+              (user_id, asset_type, asset_url, prompt, datetime.datetime.now()))
+    conn.commit()
+    conn.close()
+
+def get_user_assets(user_id, asset_type=None):
+    """Retrieve all saved media for a specific user, ordered by newest first."""
+    conn = get_connection()
+    query = "SELECT * FROM studio_assets WHERE user_id = ? "
+    params = [user_id]
+    
+    if asset_type:
+         query += "AND asset_type = ? "
+         params.append(asset_type)
+         
+    query += "ORDER BY created_at DESC"
+    df = pd.read_sql_query(query, conn, params=params)
+    conn.close()
+    return df
+
+def create_campaign(source, search_term, user_id=None):
     conn = get_connection()
     c = conn.cursor()
     c.execute("INSERT INTO campaigns (timestamp, source, search_term) VALUES (?, ?, ?)", 
@@ -335,15 +383,13 @@ def update_linkedin_details(lead_id, connections=None, about=None, location=None
     conn.close()
 
 # --- LEGACY ALIAS ---
-def add_lead(name, company=None, role=None, location=None, link=None, source="Manual", bio=None):
+def add_lead(name, company=None, role=None, location=None, link=None, source="Manual", bio=None, user_id=None):
     """
     Wrapper for V2 to support legacy calls.
     Mapping: 
     scraper_fb: add_lead(title, price, f"Marketplace ({query})", location, link)
     -> name=title, company=price, role=Source, location=location, link=link
     """
-    # Fix for scraper_fb passing 'Source' as 3rd arg (role)
-    # We need to map it correctly if it looks like a Source string
     real_source = source
     real_role = role
     
@@ -351,5 +397,4 @@ def add_lead(name, company=None, role=None, location=None, link=None, source="Ma
         real_source = role
         real_role = "Listing"
         
-    print(f"DEBUG: add_lead legacy called. Name={name}, Source={real_source}")
-    return add_lead_v2(name, company=company, role=real_role, location=location, link=link, source=real_source, bio=bio)
+    return add_lead_v2(name, company=company, role=real_role, location=location, link=link, source=real_source, bio=bio, user_id=user_id)

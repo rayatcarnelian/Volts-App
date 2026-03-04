@@ -10,7 +10,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
-import modules.database as db
+import modules.db_supabase as db
 from dotenv import load_dotenv
 
 # Use undetected-chromedriver for bypass

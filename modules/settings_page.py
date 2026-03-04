@@ -10,11 +10,11 @@ def save_key(key, value):
     os.environ[key] = value
 
 def render_settings_page():
-    st.title("⚙️ System Settings")
+    st.title("System Settings")
     st.caption("Configure your AI, Voice, and Payment integrations.")
 
     with st.container(border=True):
-        st.subheader("🧠 AI Engines")
+        st.subheader(" AI Engines")
         
         c1, c2 = st.columns(2)
         with c1:
@@ -30,7 +30,7 @@ def render_settings_page():
                 st.success("Saved!")
 
     with st.container(border=True):
-        st.subheader("📞 Voice & Telecom (Vapi/Twilio)")
+        st.subheader("Voice & Telecom (Vapi/Twilio)")
         vapi_key = st.text_input("Vapi Private Key", value=os.getenv("VAPI_API_KEY", ""), type="password")
         vapi_id = st.text_input("Vapi Phone ID", value=os.getenv("VAPI_PHONE_ID", ""))
         
@@ -40,7 +40,7 @@ def render_settings_page():
             st.success("Voice settings updated.")
 
     with st.container(border=True):
-        st.subheader("💳 Payments (Stripe)")
+        st.subheader(" Payments (Stripe)")
         stripe_key = st.text_input("Stripe Secret Key", value=os.getenv("STRIPE_SECRET_KEY", ""), type="password")
         price_id = st.text_input("Stripe Price ID", value=os.getenv("STRIPE_PRICE_ID", ""))
         
@@ -50,7 +50,7 @@ def render_settings_page():
             st.success("Payment config updated.")
 
     with st.container(border=True):
-        st.subheader("📧 Email System")
+        st.subheader(" Email System")
         gmail_user = st.text_input("Gmail Address", value=os.getenv("GMAIL_USER", ""))
         gmail_pass = st.text_input("Gmail App Password", value=os.getenv("GMAIL_APP_PASS", ""), type="password")
         
