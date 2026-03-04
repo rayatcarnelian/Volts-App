@@ -1,0 +1,6 @@
+# Install Chromium and chromedriver for Selenium web scraping
+[phases.setup]
+aptPkgs = ['chromium', 'chromium-driver']
+
+[start]
+cmd = 'streamlit run main.py --server.port ${PORT:-8501} --server.address 0.0.0.0'
