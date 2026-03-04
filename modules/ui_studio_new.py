@@ -245,7 +245,7 @@ def render_flux_tab(user, tier):
         display_choice = st.selectbox("Format", list(size_options.keys()))
         aspect_ratio = size_options[display_choice]
     
-    if st.button("Generate B-Roll Image (~$0.006)", type="primary", disabled=(tier=="FREE") or not fal.is_configured()):
+    if st.button("Generate B-Roll Image (~$0.006)", type="primary", disabled=(tier=="FREE") or not fal.setup_fal_key()):
         if prompt:
             with st.spinner("Rendering via FLUX.1 [schnell]..."):
                 res = fal.generate_image(prompt, image_size=aspect_ratio)
