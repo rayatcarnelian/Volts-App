@@ -258,7 +258,7 @@ class MapsHunter:
             
         except Exception as e:
             self._log(f"Maps Scan error: {e}", "error")
-            return []
+            raise  # Let the error surface in the UI
 
     def _hunt_email(self, url):
         """
