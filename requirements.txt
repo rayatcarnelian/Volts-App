@@ -35,3 +35,10 @@ google-generativeai
 
 edge_tts
 
+fal_client
+pyttsx3
+passlib
+cryptography
+PyPDF2
+python-docx
+
