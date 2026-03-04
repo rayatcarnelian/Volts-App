@@ -36,6 +36,7 @@ class MapsHunter:
         import os
         import platform
         import shutil
+        import glob
         from selenium import webdriver
 
         is_linux = platform.system() == "Linux"
@@ -47,7 +48,7 @@ class MapsHunter:
             from selenium.webdriver.chrome.service import Service as ChromeService
 
             # Auto-discover the chromium binary
-            # Priority: env var > shutil.which > hardcoded paths
+            # Priority: env var > shutil.which > hardcoded paths > Playwright path
             chrome_bin = os.environ.get("CHROME_BIN")
             if not chrome_bin:
                 for candidate in ["chromium-browser", "chromium", "google-chrome", "google-chrome-stable"]:
@@ -56,20 +57,24 @@ class MapsHunter:
                         chrome_bin = found
                         break
 
-            # Auto-discover chromedriver
-            driver_bin = os.environ.get("CHROMEDRIVER_PATH")
-            if not driver_bin:
-                for candidate in ["chromedriver"]:
-                    found = shutil.which(candidate)
-                    if found:
-                        driver_bin = found
-                        break
-
             if not chrome_bin:
                 for p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
                     if os.path.exists(p):
                         chrome_bin = p
                         break
+
+            # Try Playwright's Chromium as last resort
+            if not chrome_bin:
+                pw_paths = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"))
+                if pw_paths:
+                    chrome_bin = pw_paths[0]
+
+            # Auto-discover chromedriver
+            driver_bin = os.environ.get("CHROMEDRIVER_PATH")
+            if not driver_bin:
+                found = shutil.which("chromedriver")
+                if found:
+                    driver_bin = found
 
             if not driver_bin:
                 for p in ["/usr/bin/chromedriver", "/usr/lib/chromium-browser/chromedriver", "/usr/lib/chromium/chromedriver"]:
@@ -77,12 +82,12 @@ class MapsHunter:
                         driver_bin = p
                         break
 
-            if not chrome_bin or not driver_bin:
-                error_msg = f"Chromium not found on this server. Binary={chrome_bin}, Driver={driver_bin}"
+            if not chrome_bin:
+                error_msg = "Chromium binary not found. Tried: env CHROME_BIN, PATH, /usr/bin/*, Playwright cache."
                 self._log(error_msg, "error")
                 raise RuntimeError(error_msg)
 
-            self._log(f"Found: binary={chrome_bin}, driver={driver_bin}", "info")
+            self._log(f"Found: binary={chrome_bin}, driver={driver_bin or 'auto'}", "info")
 
             options = ChromeOptions()
             options.binary_location = chrome_bin
@@ -96,8 +101,12 @@ class MapsHunter:
             options.add_argument("--log-level=3")
             options.add_argument("--single-process")
 
-            service = ChromeService(executable_path=driver_bin)
-            self.driver = webdriver.Chrome(service=service, options=options)
+            if driver_bin:
+                service = ChromeService(executable_path=driver_bin)
+                self.driver = webdriver.Chrome(service=service, options=options)
+            else:
+                # Let Selenium Manager auto-download the matching chromedriver
+                self.driver = webdriver.Chrome(options=options)
 
         else:
             # === LOCAL (Windows) — Use Edge ===
