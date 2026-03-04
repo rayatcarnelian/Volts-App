@@ -42,3 +42,10 @@ cryptography
 PyPDF2
 python-docx
 
+fal_client
+pyttsx3
+passlib
+cryptography
+PyPDF2
+python-docx
+
