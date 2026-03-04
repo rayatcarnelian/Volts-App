@@ -38,4 +38,29 @@ def render_settings_page():
             if st.button("Save Fal Key"):
                 save_key("FAL_KEY", fal_key)
                 
+                
+    with st.container(border=True):
+        st.subheader("📞 Voice Apps (Vapi/Twilio)")
+        current_vapi_key = get_user_setting(user_id, "VAPI_API_KEY")
+        current_vapi_id = get_user_setting(user_id, "VAPI_PHONE_ID")
+        
+        vapi_key = st.text_input("Vapi Private Key", value=current_vapi_key, type="password")
+        vapi_id = st.text_input("Vapi Phone ID", value=current_vapi_id)
+        
+        if st.button("Save Voice Settings"):
+            save_key("VAPI_API_KEY", vapi_key)
+            save_key("VAPI_PHONE_ID", vapi_id)
+
+    with st.container(border=True):
+        st.subheader("📧 Email System")
+        current_gmail_user = get_user_setting(user_id, "GMAIL_USER")
+        current_gmail_pass = get_user_setting(user_id, "GMAIL_APP_PASS")
+        
+        gmail_user = st.text_input("Gmail Address", value=current_gmail_user)
+        gmail_pass = st.text_input("Gmail App Password", value=current_gmail_pass, type="password")
+        
+        if st.button("Save Email Config"):
+            save_key("GMAIL_USER", gmail_user)
+            save_key("GMAIL_APP_PASS", gmail_pass)
+            
     st.info("Your custom API keys are encrypted and stored directly linked to your account.")
