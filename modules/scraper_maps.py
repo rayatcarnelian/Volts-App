@@ -37,6 +37,7 @@ class MapsHunter:
         import platform
         import shutil
         import glob
+        import subprocess
         from selenium import webdriver
 
         is_linux = platform.system() == "Linux"
@@ -47,47 +48,49 @@ class MapsHunter:
             from selenium.webdriver.chrome.options import Options as ChromeOptions
             from selenium.webdriver.chrome.service import Service as ChromeService
 
-            # Auto-discover the chromium binary
-            # Priority: env var > shutil.which > hardcoded paths > Playwright path
+            # Step 1: Try to find Chromium already installed
             chrome_bin = os.environ.get("CHROME_BIN")
             if not chrome_bin:
-                for candidate in ["chromium-browser", "chromium", "google-chrome", "google-chrome-stable"]:
+                for candidate in ["chromium-browser", "chromium", "google-chrome"]:
                     found = shutil.which(candidate)
                     if found:
                         chrome_bin = found
                         break
 
-            if not chrome_bin:
-                for p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
-                    if os.path.exists(p):
-                        chrome_bin = p
-                        break
-
-            # Try Playwright's Chromium as last resort
+            # Step 2: Check Playwright's cache
             if not chrome_bin:
                 pw_paths = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"))
                 if pw_paths:
                     chrome_bin = pw_paths[0]
 
-            # Auto-discover chromedriver
-            driver_bin = os.environ.get("CHROMEDRIVER_PATH")
-            if not driver_bin:
-                found = shutil.which("chromedriver")
-                if found:
-                    driver_bin = found
+            # Step 3: If still not found, install via Playwright at runtime
+            if not chrome_bin:
+                self._log("Installing Chromium via Playwright...", "info")
+                try:
+                    result = subprocess.run(
+                        ["python", "-m", "playwright", "install", "chromium"],
+                        capture_output=True, text=True, timeout=120
+                    )
+                    self._log(f"Playwright install stdout: {result.stdout[:200]}", "info")
+                    if result.returncode != 0:
+                        self._log(f"Playwright install stderr: {result.stderr[:200]}", "warning")
+                except Exception as e:
+                    self._log(f"Playwright install failed: {e}", "warning")
 
-            if not driver_bin:
-                for p in ["/usr/bin/chromedriver", "/usr/lib/chromium-browser/chromedriver", "/usr/lib/chromium/chromedriver"]:
-                    if os.path.exists(p):
-                        driver_bin = p
-                        break
+                # Re-check Playwright's cache after install
+                pw_paths = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"))
+                if pw_paths:
+                    chrome_bin = pw_paths[0]
 
             if not chrome_bin:
-                error_msg = "Chromium binary not found. Tried: env CHROME_BIN, PATH, /usr/bin/*, Playwright cache."
+                error_msg = "Chromium not found even after Playwright install. Check Railway build logs."
                 self._log(error_msg, "error")
                 raise RuntimeError(error_msg)
 
-            self._log(f"Found: binary={chrome_bin}, driver={driver_bin or 'auto'}", "info")
+            self._log(f"Using Chromium at: {chrome_bin}", "info")
+
+            # Auto-discover chromedriver (optional — Selenium Manager can handle it)
+            driver_bin = shutil.which("chromedriver")
 
             options = ChromeOptions()
             options.binary_location = chrome_bin
