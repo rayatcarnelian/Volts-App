@@ -915,8 +915,8 @@ elif "AI Dialer" in page:
 
 # --- MODULE 5: SETTINGS ---
 elif "Settings" in page:
-    from modules import config_ui
-    config_ui.render_config_ui()
+    from modules import settings_page
+    settings_page.render_settings_page()
 
 # --- MODULE 5: THE SNIPER (Placeholder - Removed) ---
 
