@@ -23,11 +23,6 @@ def analyze_lead_with_gemini(lead_data):
     craft a highly personalized, natural-sounding ice breaker for the voice bot.
     """
     api_key = os.getenv("GEMINI_API_KEY")
-    try:
-        if 'USER_GEMINI_API_KEY' in st.session_state and st.session_state['USER_GEMINI_API_KEY']:
-            api_key = st.session_state['USER_GEMINI_API_KEY']
-    except:
-        pass
         
     if not api_key:
         print("Error: GEMINI_API_KEY missing.")

@@ -196,7 +196,7 @@ def render_strategy_tab():
     *   **Steps:** Generate 1 ultra-realistic luxury image in **Image Architect**. Overlay a quote, tip, or statistic. Post directly to your feed and stories.
     """)
     
-    st.info("Check your `.env` file! You need `GEMINI_API_KEY` for the AI Brain, and `FAL_KEY` for Images/Video.")
+    st.info("You need your `FAL_KEY` to generate Images and Videos. Go to Settings and add it!")
 
 def render_brain_tab(tier):
     """Gemini-powered script generator."""
@@ -204,7 +204,7 @@ def render_brain_tab(tier):
     st.caption("Powered by Google Gemini 1.5 Flash")
     
     if not gemini.is_configured():
-         st.error("GEMINI_API_KEY is missing from your .env file.")
+         st.error("The Master Server is missing its GEMINI_API_KEY. The Brain is offline.")
          return
          
     topic = st.text_input("What is the video about?", placeholder="e.g. 3 reasons why minimalist interior design saves money")
@@ -228,8 +228,9 @@ def render_flux_tab(user, tier):
     st.markdown("### Image Architect (FLUX.1)")
     st.caption("Powered by Fal.ai FLUX [schnell]")
     
-    if not fal.is_configured():
-        st.error("FAL_KEY is missing from your .env file.")
+    user_id = user["id"]
+    if not db.get_user_setting(user_id, "FAL_KEY"):
+        st.error("FAL_KEY is missing from your User Settings! Go to Settings in the sidebar to add it.")
         
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -262,8 +263,9 @@ def render_video_tab(user, tier):
     st.markdown("### Video Engine")
     st.caption("Powered by Fal.ai Sync-Lipsync & Kling 1.5")
     
-    if not fal.is_configured():
-        st.error("FAL_KEY is missing from your .env file.")
+    user_id = user["id"]
+    if not db.get_user_setting(user_id, "FAL_KEY"):
+        st.error("FAL_KEY is missing from your User Settings! Go to Settings in the sidebar to add it.")
         return
         
     v_tab1, v_tab2 = st.tabs(["Avatar Lip-Sync (The Hook)", "Cinematic B-Roll (Text-to-Video)"])

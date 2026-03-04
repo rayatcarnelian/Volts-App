@@ -9,19 +9,7 @@ load_dotenv()
 
 class AIGhostwriter:
     def __init__(self):
-        # BYOK Architecture: Check if the logged-in user has their own key first
-        self.api_key = None
-        
-        try:
-            # We are using try/except because st.session_state throws errors if accessed outside a Streamlit thread
-            if 'USER_GEMINI_API_KEY' in st.session_state and st.session_state['USER_GEMINI_API_KEY']:
-                self.api_key = st.session_state['USER_GEMINI_API_KEY']
-        except:
-            pass
-            
-        # Fall back to global env key if user hasn't set one
-        if not self.api_key:
-            self.api_key = os.getenv("GEMINI_API_KEY")
+        self.api_key = os.getenv("GEMINI_API_KEY")
             
         if self.api_key:
             try:

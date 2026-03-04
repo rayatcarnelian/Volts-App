@@ -45,12 +45,8 @@ def analyze_transcript_and_email(call_data: dict):
     lead_name = lead_row.get('name', 'there')
     user_id = lead_row.get('user_id')
     
-    # Get custom API key if set, else fallback
+    # Use global API key directly
     api_key = os.getenv("GEMINI_API_KEY")
-    if user_id:
-        custom_key = db.get_user_setting(user_id, "GEMINI_API_KEY")
-        if custom_key:
-            api_key = custom_key
             
     if not api_key:
          print("Webhook: GEMINI_API_KEY missing. Cannot analyze transcript.")

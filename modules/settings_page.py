@@ -33,12 +33,6 @@ def render_settings_page():
         
         c1, c2 = st.columns(2)
         with c1:
-            current_gemini = get_user_setting(user_id, "GEMINI_API_KEY")
-            gemini_key = st.text_input("Gemini API Key", value=current_gemini, type="password")
-            if st.button("Save Gemini Key"):
-                save_key("GEMINI_API_KEY", gemini_key)
-                
-        with c2:
             current_fal = get_user_setting(user_id, "FAL_KEY")
             fal_key = st.text_input("Fal.ai API Key", value=current_fal, type="password")
             if st.button("Save Fal Key"):
