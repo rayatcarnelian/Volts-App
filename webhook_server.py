@@ -31,12 +31,32 @@ def analyze_transcript_and_email(call_data: dict):
         return
 
     print(f"🔍 Analyzing transcript for {customer_phone}...")
-
-    if not GEMINI_API_KEY:
+    
+    # BYOK: Figure out which user this lead belongs to
+    df = db.get_all_leads()
+    lead_match = df[df['phone'] == customer_phone]
+    
+    if lead_match.empty:
+        print(f"⚠️ Could not find lead in CRM matching phone {customer_phone}. Cannot perform BYOK analysis.")
+        return
+        
+    lead_row = lead_match.iloc[0]
+    lead_email = lead_row.get('email', '')
+    lead_name = lead_row.get('name', 'there')
+    user_id = lead_row.get('user_id')
+    
+    # Get custom API key if set, else fallback
+    api_key = os.getenv("GEMINI_API_KEY")
+    if user_id:
+        custom_key = db.get_user_setting(user_id, "GEMINI_API_KEY")
+        if custom_key:
+            api_key = custom_key
+            
+    if not api_key:
          print("Webhook: GEMINI_API_KEY missing. Cannot analyze transcript.")
          return
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=api_key)
     
     prompt = f"""
     You are an AI Sales Manager. Read the following phone call transcript.
@@ -55,30 +75,20 @@ def analyze_transcript_and_email(call_data: dict):
         )
         decision = response.text.strip().upper()
         
+        import pandas as pd
         if "YES" in decision:
             print(f"🎯 Positive outcome detected for {customer_phone}. Triggering Auto-Emailer!")
             
-            # 1. Lookup lead by phone to get their email
-            df = db.get_all_leads()
-            lead_match = df[df['phone'] == customer_phone]
-            
-            if not lead_match.empty:
-                lead_email = lead_match.iloc[0].get('email', '')
-                lead_name = lead_match.iloc[0].get('name', 'there')
+            if pd.notna(lead_email) and lead_email != '':
+                # Trigger the Email Blaster
+                blaster = EmailBlaster()
+                subject = f"Volts Design Portfolio - As requested!"
+                body = f"Hi {lead_name},\n\nGreat speaking with you just now. As promised, here is the link to our portfolio: https://voltsdesign.com/portfolio\n\nLet me know when you have time to chat next week.\n\nBest,\nHazem\nVolts Design Team"
                 
-                if pd.notna(lead_email) and lead_email != '':
-                    # 2. Trigger the Email Blaster
-                    blaster = EmailBlaster()
-                    subject = f"Volts Design Portfolio - As requested!"
-                    body = f"Hi {lead_name},\n\nGreat speaking with you just now. As promised, here is the link to our portfolio: https://voltsdesign.com/portfolio\n\nLet me know when you have time to chat next week.\n\nBest,\nHazem\nVolts Design Team"
-                    
-                    blaster.send_email(lead_email, subject, body)
-                    print(f"📧 Auto-Email successfully sent to {lead_email}!")
-                else:
-                    print(f"⚠️ Prospect wanted an email, but no email address found in CRM for {customer_phone}.")
+                blaster.send_email(lead_email, subject, body)
+                print(f"📧 Auto-Email successfully sent to {lead_email}!")
             else:
-                 print(f"⚠️ Could not find lead in CRM matching phone {customer_phone}.")
-                 
+                print(f"⚠️ Prospect wanted an email, but no email address found in CRM for {customer_phone}.")
         else:
             print(f"❌ Prospect did not request email. Moving on.")
             

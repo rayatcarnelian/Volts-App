@@ -9,7 +9,20 @@ load_dotenv()
 
 class AIGhostwriter:
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        # BYOK Architecture: Check if the logged-in user has their own key first
+        self.api_key = None
+        
+        try:
+            # We are using try/except because st.session_state throws errors if accessed outside a Streamlit thread
+            if 'USER_GEMINI_API_KEY' in st.session_state and st.session_state['USER_GEMINI_API_KEY']:
+                self.api_key = st.session_state['USER_GEMINI_API_KEY']
+        except:
+            pass
+            
+        # Fall back to global env key if user hasn't set one
+        if not self.api_key:
+            self.api_key = os.getenv("GEMINI_API_KEY")
+            
         if self.api_key:
             try:
                 self.client = genai.Client(api_key=self.api_key)
@@ -153,7 +166,16 @@ Return ONLY a number between 0-100. No explanation."""
 
 class VisualStudio:
     def __init__(self):
-        self.api_token = os.getenv("REPLICATE_API_TOKEN")
+        # BYOK Architecture for Image Generation
+        self.api_token = None
+        try:
+            if 'USER_REPLICATE_API_TOKEN' in st.session_state and st.session_state['USER_REPLICATE_API_TOKEN']:
+                self.api_token = st.session_state['USER_REPLICATE_API_TOKEN']
+        except:
+            pass
+            
+        if not self.api_token:
+            self.api_token = os.getenv("REPLICATE_API_TOKEN")
         
     def generate_concept(self, prompt, save_path="assets/concepts/"):
         if not self.api_token:

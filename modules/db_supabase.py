@@ -143,6 +143,18 @@ def init_db():
                 PRIMARY KEY (campaign_id, lead_id)
             )
         ''')
+        
+        # 7. User Settings (BYOK Architecture)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_settings (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                setting_key TEXT NOT NULL,
+                setting_value TEXT NOT NULL,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, setting_key)
+            )
+        ''')
 
         conn.commit()
         print("Supabase PostgreSQL Database successfully initialized!")
@@ -450,6 +462,72 @@ def get_call_credits(user_id):
 def update_call_minutes(user_id, used_minutes):
     """Updates the used minutes parameter."""
     return True
+
+# --- USER SETTINGS (BYOK) ---
+
+def save_user_setting(user_id, key, value):
+    """Saves or updates a user-specific API key/setting."""
+    if not user_id:
+        return False
+        
+    conn = get_connection()
+    if not conn: return False
+    
+    try:
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO user_settings (user_id, setting_key, setting_value)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (user_id, setting_key) 
+            DO UPDATE SET setting_value = EXCLUDED.setting_value
+        """, (user_id, key, value))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error saving user setting {key}: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def get_user_setting(user_id, key, default=""):
+    """Fetches a specific setting for a user."""
+    if not user_id:
+        return default
+        
+    conn = get_connection()
+    if not conn: return default
+    
+    try:
+        c = conn.cursor(cursor_factory=RealDictCursor)
+        c.execute("SELECT setting_value FROM user_settings WHERE user_id = %s AND setting_key = %s", (user_id, key))
+        result = c.fetchone()
+        if result:
+            return result['setting_value']
+        return default
+    except Exception as e:
+        print(f"Error fetching user setting {key}: {e}")
+        return default
+    finally:
+        if conn: conn.close()
+        
+def get_all_user_settings(user_id):
+    """Fetches all settings for a user as a dictionary."""
+    if not user_id:
+        return {}
+        
+    conn = get_connection()
+    if not conn: return {}
+    
+    try:
+        c = conn.cursor(cursor_factory=RealDictCursor)
+        c.execute("SELECT setting_key, setting_value FROM user_settings WHERE user_id = %s", (user_id,))
+        results = c.fetchall()
+        return {row['setting_key']: row['setting_value'] for row in results}
+    except Exception as e:
+        print(f"Error fetching all user settings: {e}")
+        return {}
+    finally:
+        if conn: conn.close()
 
 if __name__ == "__main__":
     init_db()

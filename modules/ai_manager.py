@@ -13,23 +13,31 @@ from dotenv import load_dotenv
 from google import genai
 import modules.db_supabase as db
 import requests
+import streamlit as st
 
 load_dotenv()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-VAPI_API_KEY = os.getenv("VAPI_API_KEY")
-VAPI_PHONE_ID = os.getenv("VAPI_PHONE_ID")
 
 def analyze_lead_with_gemini(lead_data):
     """
     Uses Google Gemini (Free Tier) to read the lead's data and 
     craft a highly personalized, natural-sounding ice breaker for the voice bot.
     """
-    if not GEMINI_API_KEY:
+    api_key = os.getenv("GEMINI_API_KEY")
+    try:
+        if 'USER_GEMINI_API_KEY' in st.session_state and st.session_state['USER_GEMINI_API_KEY']:
+            api_key = st.session_state['USER_GEMINI_API_KEY']
+    except:
+        pass
+        
+    if not api_key:
         print("Error: GEMINI_API_KEY missing.")
         return "Hey there, I saw your business online and wanted to connect."
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    try:
+        client = genai.Client(api_key=api_key)
+    except Exception as e:
+        print(f"Gemini Init Error: {e}")
+        return "Hey there, I wanted to quickly reach out about your business. Do you have a quick second?"
     
     prompt = f"""
     You are an elite Inside Sales Hacker preparing a call script for an AI Voice Agent.
@@ -69,7 +77,19 @@ def dispatch_vapi_call(lead_data, ice_breaker):
     Triggers the Vapi AI to call the lead, injecting the Gemini Ice Breaker 
     directly into the AI's system prompt instructions.
     """
-    if not VAPI_API_KEY or not VAPI_PHONE_ID:
+    
+    vapi_key = os.getenv("VAPI_API_KEY")
+    vapi_id = os.getenv("VAPI_PHONE_ID")
+    
+    try:
+        if 'USER_VAPI_API_KEY' in st.session_state and st.session_state['USER_VAPI_API_KEY']:
+            vapi_key = st.session_state['USER_VAPI_API_KEY']
+        if 'USER_VAPI_PHONE_ID' in st.session_state and st.session_state['USER_VAPI_PHONE_ID']:
+            vapi_id = st.session_state['USER_VAPI_PHONE_ID']
+    except:
+        pass
+    
+    if not vapi_key or not vapi_id:
         print("Error: Vapi API keys missing.")
         return False
         
@@ -77,9 +97,8 @@ def dispatch_vapi_call(lead_data, ice_breaker):
     if not phone:
         print(f"Skipping {lead_data.get('name')}: No phone number.")
         return False
-
     headers = {
-        'Authorization': f'Bearer {VAPI_API_KEY}',
+        'Authorization': f'Bearer {vapi_key}',
         'Content-Type': 'application/json',
     }
 
@@ -102,7 +121,7 @@ def dispatch_vapi_call(lead_data, ice_breaker):
     """
 
     payload = {
-        "phoneNumberId": VAPI_PHONE_ID,
+        "phoneNumberId": vapi_id,
         "customer": {
             "number": phone,
             "name": lead_data.get('name', '')

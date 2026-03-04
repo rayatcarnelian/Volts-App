@@ -125,6 +125,16 @@ if not st.session_state["user"]:
                     user_data = auth_module.login(email, password)
                     if user_data:
                         st.session_state["user"] = user_data
+                        
+                        # BYOK Architecture: Load customized keys into session
+                        try:
+                            from modules.db_supabase import get_all_user_settings
+                            user_keys = get_all_user_settings(user_data['id'])
+                            for k, v in user_keys.items():
+                                st.session_state[f"USER_{k}"] = v
+                        except Exception as e:
+                            print(f"Error loading custom keys: {e}")
+                            
                         st.success("Login successful!")
                         st.toast(f"Welcome back, {email.split('@')[0]}!", icon="")
                         time.sleep(0.5)

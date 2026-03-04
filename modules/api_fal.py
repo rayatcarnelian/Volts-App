@@ -5,13 +5,26 @@ Provides high-speed, cost-effective Image and Video generation.
 import os
 import fal_client
 
-def is_configured() -> bool:
-    """Check if the Fal.ai API key is available in the environment."""
-    return bool(os.getenv("FAL_KEY"))
+def setup_fal_key() -> bool:
+    """Injects the user's personal Fal key (if set) for this generation run."""
+    key = os.getenv("FAL_KEY")
+    
+    try:
+        import streamlit as st
+        # Check for user specific key
+        if 'USER_FAL_KEY' in st.session_state and st.session_state['USER_FAL_KEY']:
+            key = st.session_state['USER_FAL_KEY']
+    except:
+        pass
+        
+    if key:
+        os.environ["FAL_KEY"] = key
+        return True
+    return False
 
 def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
     """Generate an image using FLUX.1 [schnell] for ultra-fast, cheap B-Roll."""
-    if not is_configured():
+    if not setup_fal_key():
         return {
             "success": False, 
             "error": "Fal API key not found. Please add FAL_KEY to your .env file."
@@ -45,7 +58,7 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
 
 def generate_video(prompt: str, image_url: str = None) -> dict:
     """Generate a short B-Roll video clip using Kling 1.5 Standard (Cost-Optimized)."""
-    if not is_configured():
+    if not setup_fal_key():
         return {"success": False, "error": "Fal API key missing."}
         
     try:
@@ -80,7 +93,7 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
 
 def generate_avatar_sync(video_url: str, audio_url: str) -> dict:
     """Lip-sync a base avatar video to a new audio track using Sync Lipsync."""
-    if not is_configured():
+    if not setup_fal_key():
         return {"success": False, "error": "Fal API key missing."}
         
     try:
