@@ -296,10 +296,6 @@ if "Lead Search" in page:
                     st.subheader("/// MAPS_AGENT")
                     keyword = st.text_input("SEARCH QUERY", "Luxury Interior Design", help="e.g. Architects in KL")
                     
-                    # Browser Selector
-                    browser_choice = st.radio("BROWSER ENGINE", ["Edge (Recommended)", "Chrome"], index=0, horizontal=True, help="Edge is usually more stable on Windows. Chrome may be faster but riskier.")
-                    engine_map = {"Edge (Recommended)": "Edge", "Chrome": "Chrome"}
-                    
                     # Target Leads Slider
                     target_limit = st.slider("TARGET LEADS", min_value=5, max_value=100, value=20, step=5, help="How many leads to extract? Higher numbers take longer.")
                     
@@ -327,9 +323,9 @@ if "Lead Search" in page:
                             try:
                                 st.write("Initializing browser engine...")
                                 from modules.scraper_maps import MapsHunter
-                                hunter = MapsHunter(browser_type=engine_map[browser_choice])
+                                hunter = MapsHunter()
                                 
-                                st.write(f" Opening Google Maps (Engine: {engine_map[browser_choice]})...")
+                                st.write(f" Opening Google Maps...")
                                 leads = hunter.scan(keyword, limit=target_limit)
                                 hunter.close()
                                 

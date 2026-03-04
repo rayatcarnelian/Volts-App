@@ -32,22 +32,58 @@ class MapsHunter:
             print(f"[{level.upper()}] {message}")
 
     def _setup_driver(self):
+        """Auto-detect the best browser: Cloud Chromium on Linux, Edge on Windows."""
         import os
         import platform
+        import shutil
         from selenium import webdriver
 
-        is_cloud = platform.system() == "Linux"
+        is_linux = platform.system() == "Linux"
 
-        # ── Cloud (Railway / Linux) ──────────────────────────────
-        # Uses the system-installed Chromium from packages.txt
-        def launch_cloud_chromium():
+        if is_linux:
+            # === CLOUD (Railway / Linux) ===
             self._log("Initializing Engine (Cloud Chromium)...", "info")
             from selenium.webdriver.chrome.options import Options as ChromeOptions
             from selenium.webdriver.chrome.service import Service as ChromeService
 
+            # Auto-discover the chromium binary
+            chrome_bin = None
+            for candidate in ["chromium-browser", "chromium", "google-chrome", "google-chrome-stable"]:
+                found = shutil.which(candidate)
+                if found:
+                    chrome_bin = found
+                    break
+
+            # Auto-discover chromedriver
+            driver_bin = None
+            for candidate in ["chromedriver"]:
+                found = shutil.which(candidate)
+                if found:
+                    driver_bin = found
+                    break
+
+            if not chrome_bin:
+                # Try common hardcoded paths as last resort
+                for p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
+                    if os.path.exists(p):
+                        chrome_bin = p
+                        break
+
+            if not driver_bin:
+                for p in ["/usr/bin/chromedriver", "/usr/lib/chromium-browser/chromedriver", "/usr/lib/chromium/chromedriver"]:
+                    if os.path.exists(p):
+                        driver_bin = p
+                        break
+
+            if not chrome_bin or not driver_bin:
+                error_msg = f"Chromium not found on this server. Binary={chrome_bin}, Driver={driver_bin}"
+                self._log(error_msg, "error")
+                raise RuntimeError(error_msg)
+
+            self._log(f"Found: binary={chrome_bin}, driver={driver_bin}", "info")
+
             options = ChromeOptions()
-            # Use system chromium binary
-            options.binary_location = "/usr/bin/chromium"
+            options.binary_location = chrome_bin
             options.add_argument("--headless=new")
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
@@ -56,12 +92,13 @@ class MapsHunter:
             options.add_argument("--disable-blink-features=AutomationControlled")
             options.add_argument("--remote-allow-origins=*")
             options.add_argument("--log-level=3")
+            options.add_argument("--single-process")
 
-            service = ChromeService(executable_path="/usr/bin/chromedriver")
-            return webdriver.Chrome(service=service, options=options)
+            service = ChromeService(executable_path=driver_bin)
+            self.driver = webdriver.Chrome(service=service, options=options)
 
-        # ── Local Windows: Edge ──────────────────────────────────
-        def launch_edge():
+        else:
+            # === LOCAL (Windows) — Use Edge ===
             self._log("Initializing Engine (Edge)...", "info")
             from selenium.webdriver.edge.options import Options as EdgeOptions
             options = EdgeOptions()
@@ -74,65 +111,7 @@ class MapsHunter:
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--remote-allow-origins=*")
             options.add_argument("--headless=new")
-            return webdriver.Edge(options=options)
-
-        # ── Local Windows: Chrome (undetected) ───────────────────
-        def launch_chrome():
-            self._log("Initializing Engine (Chrome)...", "info")
-            import undetected_chromedriver as uc
-            options = uc.ChromeOptions()
-            options.add_argument("--window-size=1920,1080")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--headless=new")
-            # Cleanup patcher
-            appdata = os.environ.get('APPDATA', '')
-            if appdata:
-                patcher_path = os.path.join(appdata, 'undetected_chromedriver', 'undetected_chromedriver.exe')
-                if os.path.exists(patcher_path):
-                    try: os.remove(patcher_path)
-                    except: pass
-            try:
-                return uc.Chrome(options=options, use_subprocess=True)
-            except Exception:
-                print("Falling back to pinned Chrome version 144...")
-                options = uc.ChromeOptions()
-                options.add_argument("--window-size=1920,1080")
-                options.add_argument("--disable-gpu")
-                options.add_argument("--no-sandbox")
-                options.add_argument("--disable-dev-shm-usage")
-                options.add_argument("--headless=new")
-                return uc.Chrome(options=options, use_subprocess=True, version_main=144)
-
-        try:
-            # Cloud always uses system Chromium
-            if is_cloud:
-                self.driver = launch_cloud_chromium()
-                return
-
-            # Local: user preferred browser
-            if self.browser_type == "Chrome":
-                try:
-                    self.driver = launch_chrome()
-                    return
-                except:
-                    self._log("Chrome failed. Falling back to Edge.", "warning")
-
-            # Default or Fallback to Edge
-            self.driver = launch_edge()
-            return
-
-        except Exception as e:
-            # Final Hail Mary: Try Chrome if Edge failed and wasn't tried yet
-            if not is_cloud and self.browser_type != "Chrome":
-                try:
-                    self.driver = launch_chrome()
-                    return
-                except: pass
-
-            self._log(f"ALL DRIVERS FAILED. Critical Error: {e}", "error")
-            raise e
+            self.driver = webdriver.Edge(options=options)
 
     def scan(self, keyword, limit=50):
         """
