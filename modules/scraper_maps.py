@@ -47,23 +47,25 @@ class MapsHunter:
             from selenium.webdriver.chrome.service import Service as ChromeService
 
             # Auto-discover the chromium binary
-            chrome_bin = None
-            for candidate in ["chromium-browser", "chromium", "google-chrome", "google-chrome-stable"]:
-                found = shutil.which(candidate)
-                if found:
-                    chrome_bin = found
-                    break
+            # Priority: env var > shutil.which > hardcoded paths
+            chrome_bin = os.environ.get("CHROME_BIN")
+            if not chrome_bin:
+                for candidate in ["chromium-browser", "chromium", "google-chrome", "google-chrome-stable"]:
+                    found = shutil.which(candidate)
+                    if found:
+                        chrome_bin = found
+                        break
 
             # Auto-discover chromedriver
-            driver_bin = None
-            for candidate in ["chromedriver"]:
-                found = shutil.which(candidate)
-                if found:
-                    driver_bin = found
-                    break
+            driver_bin = os.environ.get("CHROMEDRIVER_PATH")
+            if not driver_bin:
+                for candidate in ["chromedriver"]:
+                    found = shutil.which(candidate)
+                    if found:
+                        driver_bin = found
+                        break
 
             if not chrome_bin:
-                # Try common hardcoded paths as last resort
                 for p in ["/usr/bin/chromium-browser", "/usr/bin/chromium", "/usr/bin/google-chrome"]:
                     if os.path.exists(p):
                         chrome_bin = p
