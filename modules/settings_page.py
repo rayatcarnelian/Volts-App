@@ -36,6 +36,11 @@ def render_settings_page():
             if st.button("Save Gemini Key"):
                 save_key("GEMINI_API_KEY", gemini_key)
                 
+            current_fal = get_user_setting(user_id, "FAL_KEY")
+            fal_key = st.text_input("Fal.ai API Key", value=current_fal, type="password")
+            if st.button("Save Fal Key"):
+                save_key("FAL_KEY", fal_key)
+                
         with c2:
             current_replicate = get_user_setting(user_id, "REPLICATE_API_TOKEN")
             replicate_key = st.text_input("Replicate API Token", value=current_replicate, type="password")

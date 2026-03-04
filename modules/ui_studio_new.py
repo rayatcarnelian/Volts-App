@@ -27,8 +27,6 @@ def render_studio():
     # --- ROUTER ---
     if not user:
         render_auth_page()
-    elif user["tier"] == "PRICING_VIEW":
-        render_pricing_page()
     else:
         render_app_interface(user)
 
@@ -144,13 +142,7 @@ def render_app_interface(user):
     st.caption("The High-Volume Social Media Pipeline.")
     
     db_credits = auth.get_user_credits(user["id"])
-    tier = db_credits["tier"] if db_credits else "FREE"
-    
-    if tier == "FREE":
-        st.warning("Content Studio is in View-Only Mode. Upgrade to Pro to unlock API Generation.")
-        if st.button("Unlock Studio Pro"):
-            st.session_state["user"]["tier"] = "PRICING_VIEW"
-            st.rerun()
+    tier = "PRO" # Overridden to give all users full access without subscriptions
             
     st.markdown("---")
     
