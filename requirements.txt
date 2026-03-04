@@ -29,3 +29,5 @@ google-genai
 sentry-sdk
 google-genai
 moviepy<2.0.0
+psycopg2-binary
+
