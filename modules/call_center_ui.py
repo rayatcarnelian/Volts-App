@@ -25,7 +25,7 @@ def render_call_center_ui():
     
     user = st.session_state["user"]
     user_id = user["id"]
-    tier = user.get("tier", "FREE")
+    tier = "PRO" # Unlimited Access
     
     # ================================================================
     # 1. HEADER: Usage Meter
@@ -33,11 +33,10 @@ def render_call_center_ui():
     st.title("TELEPHONY COMMAND")
     st.caption("Enterprise Cloud Voice • Low Latency • Vapi.ai Neural Engine")
     
-    # Get call credits from DB
-    call_credits = auth.get_call_credits(user_id)
-    mins_used = call_credits["used"]
-    mins_limit = call_credits["limit"]
-    mins_remaining = call_credits["remaining"]
+    # Unlimited Credits for current deployment
+    mins_used = 0
+    mins_limit = 9999
+    mins_remaining = 9999
     
     # Usage Bar
     h1, h2, h3 = st.columns([2, 1, 1])
@@ -82,12 +81,12 @@ def render_call_center_ui():
     # ================================================================
     # 3. CLOUD CONFIGURATION CHECK
     # ================================================================
-    api_key = os.getenv("VAPI_API_KEY", "")
-    phone_id = os.getenv("VAPI_PHONE_ID", "")
+    api_key = db.get_user_setting(user_id, "VAPI_API_KEY")
+    phone_id = db.get_user_setting(user_id, "VAPI_PHONE_ID")
     
     if not api_key or not phone_id:
         st.error("CLOUD CREDENTIALS MISSING")
-        st.info("Go to **SETTINGS** -> **Cloud Voice** to configure your Vapi Keys.")
+        st.info("Go to **SETTINGS** in the sidebar to configure your personal Vapi Keys.")
         st.code(f"Key Present: {bool(api_key)}\nID Present: {bool(phone_id)}")
         return
 

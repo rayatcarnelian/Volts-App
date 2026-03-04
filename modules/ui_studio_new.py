@@ -331,11 +331,11 @@ def render_gallery_tab(user):
     for index, row in assets_df.iterrows():
         col = cols[index % 3]
         with col:
-            st.markdown(f"**{row['asset_type'].upper()}**")
-            if row['asset_type'] == 'image':
-                st.image(row['asset_url'], use_container_width=True)
-            elif row['asset_type'] == 'video':
-                st.video(row['asset_url'])
+            st.markdown(f"**{row['type'].upper()}**")
+            if row['type'] == 'image':
+                st.image(row['url'], use_container_width=True)
+            elif row['type'] == 'video':
+                st.video(row['url'])
             
             with st.expander("Prompt Details"):
                 st.caption(row['prompt'])
