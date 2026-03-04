@@ -33,19 +33,43 @@ class IPropertyHunter:
             print(f"[{level.upper()}] {safe_msg}")
 
     def _setup_driver(self):
+        import platform
+        is_cloud = platform.system() == "Linux"
+
+        # ── Cloud (Railway) ──
+        if is_cloud:
+            try:
+                from selenium import webdriver
+                from selenium.webdriver.chrome.options import Options as ChromeOptions
+                from selenium.webdriver.chrome.service import Service as ChromeService
+                print(">>> INITIALIZING IPROPERTY HUNTER (Cloud Chromium) <<<")
+                options = ChromeOptions()
+                options.binary_location = "/usr/bin/chromium"
+                options.add_argument("--headless=new")
+                options.add_argument("--no-sandbox")
+                options.add_argument("--disable-dev-shm-usage")
+                options.add_argument("--window-size=1920,1080")
+                options.add_argument("--disable-popup-blocking")
+                options.add_argument("--remote-allow-origins=*")
+                options.page_load_strategy = 'eager'
+                service = ChromeService(executable_path="/usr/bin/chromedriver")
+                self.driver = webdriver.Chrome(service=service, options=options)
+                self.driver.set_page_load_timeout(60)
+                return
+            except Exception as e:
+                self._log(f"Cloud Chromium Init Failed: {e}", "error")
+                raise e
+
+        # ── Local (Windows) ──
         try:
             print(">>> INITIALIZING IPROPERTY HUNTER (Undetected Mode) <<<")
             
-            # Force Kill any lingering chrome processes programmatically if possible
-            # os.system("taskkill /f /im chrome.exe") 
-
             options = uc.ChromeOptions()
             options.add_argument("--no-sandbox")
             options.add_argument("--disable-dev-shm-usage")
             options.add_argument("--window-size=1920,1080")
             options.add_argument("--disable-popup-blocking")
             
-            # Use a random/unique profile to avoid locks from crashed sessions
             import uuid
             cwd = os.getcwd()
             profile_dir = os.path.join(cwd, f"chrome_profile_iproperty_{uuid.uuid4().hex[:8]}")
@@ -55,12 +79,10 @@ class IPropertyHunter:
             options.add_argument(f"--user-data-dir={profile_dir}")
             options.page_load_strategy = 'eager'
             
-            # Remove use_subprocess=True as it can sometimes cause connectivity issues
             try:
                 self.driver = uc.Chrome(options=options)
             except Exception as e:
                 print(f"Standard Init failed, retrying with version_main=144... ({e})")
-                # MUST Re-create options as they cannot be reused
                 options = uc.ChromeOptions()
                 options.add_argument("--no-sandbox")
                 options.add_argument("--disable-dev-shm-usage")

@@ -37,6 +37,27 @@ class PropGuruHunter:
             print(f"[{level.upper()}] {safe_msg}")
 
     def _setup_driver(self, headless=True):
+        import platform
+        is_cloud = platform.system() == "Linux"
+
+        # ── Cloud (Railway) ──
+        if is_cloud:
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options as ChromeOptions
+            from selenium.webdriver.chrome.service import Service as ChromeService
+            options = ChromeOptions()
+            options.binary_location = "/usr/bin/chromium"
+            options.add_argument("--headless=new")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--remote-allow-origins=*")
+            options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
+            service = ChromeService(executable_path="/usr/bin/chromedriver")
+            self.driver = webdriver.Chrome(service=service, options=options)
+            return
+
+        # ── Local (Windows) ──
         import undetected_chromedriver as uc
         options = uc.ChromeOptions()
         options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
