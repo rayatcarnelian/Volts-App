@@ -61,118 +61,137 @@ class MapsHunter:
         self.driver = webdriver.Edge(options=options)
 
     def _cloud_scan(self, keyword, limit=50):
-        """HTTP-based business search for cloud environments (no browser)."""
+        """HTTP-based business search for cloud environments."""
         import re
-        import requests
+        import time
         from bs4 import BeautifulSoup
-        from duckduckgo_search import DDGS
         import streamlit as st
-
+        
         results = []
-        self._log(f"Cloud Scan: Searching for '{keyword}' via DuckDuckGo...", "info")
+        all_search_results = []
+        self._log(f"Cloud Scan: Searching for '{keyword}'...", "info")
 
+        # 1. Try DuckDuckGo Library
         try:
-            # Use DuckDuckGo to find businesses
+            from duckduckgo_search import DDGS
             ddgs = DDGS()
-            
-            # Simple, effective search queries
-            queries = [
-                f"{keyword} phone number address",
-                f"{keyword} contact details",
-            ]
-            
-            all_search_results = []
+            queries = [f"{keyword} contact phone number", f"{keyword} location address"]
             for q in queries:
                 try:
-                    batch = list(ddgs.text(q, max_results=limit * 2))
+                    batch = list(ddgs.text(q, max_results=30, backend="html"))
                     all_search_results.extend(batch)
-                    self._log(f"Query '{q[:40]}...' returned {len(batch)} results", "info")
+                    time.sleep(1)
                 except Exception as e:
-                    self._log(f"Search query failed: {e}", "warning")
-
-            # Deduplicate by URL
-            seen_urls = set()
-            search_results = []
-            for r in all_search_results:
-                url = r.get("href", "")
-                if url and url not in seen_urls:
-                    seen_urls.add(url)
-                    search_results.append(r)
-
-            self._log(f"Total unique results: {len(search_results)}", "info")
-
-            if not search_results:
-                self._log("DuckDuckGo returned no results for this query.", "warning")
-                return []
-
-            progress_bar = st.progress(0)
-
-            for i, result in enumerate(search_results):
-                if len(results) >= limit:
-                    break
-
-                title = result.get("title", "")
-                body = result.get("body", "")
-                url = result.get("href", "")
-
-                if not title or len(title) < 3:
-                    continue
-
-                # Extract phone from snippet
-                phone = "N/A"
-                phone_match = re.search(r'[\+]?[\d][\d\s\-\.\(\)]{6,16}[\d]', body)
-                if phone_match:
-                    phone = phone_match.group().strip()
-
-                # Website
-                website = url
-
-                # Extract address from snippet (flexible)
-                address = "N/A"
-                if body and len(body) > 20:
-                    # Take the first sentence-like chunk as address hint
-                    parts = body.split(".")
-                    for part in parts:
-                        if any(kw in part.lower() for kw in ["street", "road", "ave", "blvd", "jalan", "jln", "floor", "unit", "no.", "suite", "level"]):
-                            address = part.strip()[:100]
-                            break
-
-                # Clean up the name
-                name = title.split(" - ")[0].split(" | ")[0].split(" — ")[0].strip()
-                if len(name) > 60:
-                    name = name[:60]
-
-                results.append({
-                    "Name": name,
-                    "Phone": phone,
-                    "Website": website,
-                    "Email": "N/A",
-                    "Address": address,
-                    "Source": "Google (Cloud)",
-                    "Notes": f"Extracted via '{keyword}'"
-                })
-
-                progress_bar.progress(min((i + 1) / max(limit, 1), 1.0))
-
-            self._log(f"Extracted {len(results)} leads from search results", "info")
-
-            # Email hunting for results with websites
-            if results:
-                self._log(f"Hunting emails for {len(results)} leads...", "info")
-                import concurrent.futures
-
-                def process_email(item):
-                    ws = item.get("Website", "N/A")
-                    if ws != "N/A" and "google.com" not in ws:
-                        item["Email"] = self._hunt_email(ws)
-                    return item
-
-                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                    results = list(executor.map(process_email, results))
-
+                    self._log(f"DDG query failed: {e}", "warning")
         except Exception as e:
-            self._log(f"Cloud scan error: {e}", "error")
-            raise
+            self._log(f"DDG search module error: {e}", "warning")
+
+        # 2. If no results, Fallback to Google Search via curl_cffi (highly robust against blocks)
+        if not all_search_results:
+            self._log("DDG returned 0 results. Falling back to Google Search...", "warning")
+            try:
+                from curl_cffi import requests as c_requests
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+                # Search Google
+                g_url = f"https://www.google.com/search?q={keyword.replace(' ', '+')}+business+contact+phone"
+                r = c_requests.get(g_url, headers=headers, impersonate="chrome110")
+                soup = BeautifulSoup(r.text, 'html.parser')
+                
+                # Parse Google Organic Results
+                for g in soup.find_all('div', class_='g'):
+                    a_tag = g.find('a', href=True)
+                    if not a_tag: continue
+                    url = a_tag['href']
+                    if url.startswith('/'): continue
+                    
+                    title = g.find('h3')
+                    title_text = title.text if title else "Unknown"
+                    
+                    snippet = ""
+                    for span in g.find_all('span'):
+                        if len(span.text) > 30:
+                            snippet += span.text + " "
+                    
+                    if len(title_text) > 3:
+                        all_search_results.append({
+                            "title": title_text,
+                            "href": url,
+                            "body": snippet
+                        })
+            except Exception as e:
+                self._log(f"Google fallback failed: {e}", "error")
+
+        # Deduplicate by URL
+        seen_urls = set()
+        search_results = []
+        for r in all_search_results:
+            url = r.get("href", "")
+            if url and url not in seen_urls and "google.com" not in url:
+                seen_urls.add(url)
+                search_results.append(r)
+
+        self._log(f"Total unique results found: {len(search_results)}", "info")
+
+        if not search_results:
+            self._log("All search strategies returned no results.", "error")
+            return []
+
+        progress_bar = st.progress(0)
+
+        for i, result in enumerate(search_results):
+            if len(results) >= limit:
+                break
+
+            title = result.get("title", "")
+            body = result.get("body", "")
+            url = result.get("href", "")
+
+            if not title or len(title) < 3:
+                continue
+
+            # Extract Phone
+            phone = "N/A"
+            phone_match = re.search(r'[\+]?[\d][\d\s\-\.\(\)]{6,16}[\d]', body)
+            if phone_match:
+                phone = phone_match.group().strip()
+
+            # Extract Address (Flexible)
+            address = "N/A"
+            if body and len(body) > 15:
+                parts = body.split(".")
+                for part in parts:
+                    if any(kw in part.lower() for kw in ["street", "road", "ave", "blvd", "jalan", "jln", "floor", "unit", "no.", "suite", "level"]):
+                        address = part.strip()[:100]
+                        break
+
+            # Clean Name
+            name = title.split(" - ")[0].split(" | ")[0].split(" — ")[0].strip()
+            if len(name) > 60: name = name[:60]
+
+            results.append({
+                "Name": name,
+                "Phone": phone,
+                "Website": url,
+                "Email": "N/A",
+                "Address": address,
+                "Source": "Google Maps",
+                "Notes": f"Cloud scan: '{keyword}'"
+            })
+            progress_bar.progress(min((i + 1) / max(limit, 1), 1.0))
+
+        self._log(f"Extracted {len(results)} initial leads", "info")
+
+        if results:
+            self._log("Hunting emails (this may take a moment)...", "info")
+            import concurrent.futures
+            def process_email(item):
+                ws = item.get("Website", "N/A")
+                if ws != "N/A":
+                    item["Email"] = self._hunt_email(ws)
+                return item
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                results = list(executor.map(process_email, results))
 
         return results
 
