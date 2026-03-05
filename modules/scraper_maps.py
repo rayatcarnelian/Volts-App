@@ -61,7 +61,7 @@ class MapsHunter:
         self.driver = webdriver.Edge(options=options)
 
     def _cloud_scan(self, keyword, limit=50):
-        """HTTP-based Google Maps scraping for cloud environments (no browser)."""
+        """HTTP-based business search for cloud environments (no browser)."""
         import re
         import requests
         from bs4 import BeautifulSoup
@@ -72,60 +72,89 @@ class MapsHunter:
         self._log(f"Cloud Scan: Searching for '{keyword}' via DuckDuckGo...", "info")
 
         try:
-            # Use DuckDuckGo to find businesses matching the keyword
+            # Use DuckDuckGo to find businesses
             ddgs = DDGS()
-            search_results = list(ddgs.text(
-                f"{keyword} site:google.com/maps/place OR {keyword} business contact",
-                max_results=limit * 3  # Over-fetch to filter
-            ))
+            
+            # Simple, effective search queries
+            queries = [
+                f"{keyword} phone number address",
+                f"{keyword} contact details",
+            ]
+            
+            all_search_results = []
+            for q in queries:
+                try:
+                    batch = list(ddgs.text(q, max_results=limit * 2))
+                    all_search_results.extend(batch)
+                    self._log(f"Query '{q[:40]}...' returned {len(batch)} results", "info")
+                except Exception as e:
+                    self._log(f"Search query failed: {e}", "warning")
 
-            self._log(f"Found {len(search_results)} search results, extracting data...", "info")
+            # Deduplicate by URL
+            seen_urls = set()
+            search_results = []
+            for r in all_search_results:
+                url = r.get("href", "")
+                if url and url not in seen_urls:
+                    seen_urls.add(url)
+                    search_results.append(r)
+
+            self._log(f"Total unique results: {len(search_results)}", "info")
+
+            if not search_results:
+                self._log("DuckDuckGo returned no results for this query.", "warning")
+                return []
 
             progress_bar = st.progress(0)
-            processed = 0
 
             for i, result in enumerate(search_results):
                 if len(results) >= limit:
                     break
 
-                title = result.get("title", "Unknown Business")
+                title = result.get("title", "")
                 body = result.get("body", "")
                 url = result.get("href", "")
 
-                # Skip non-business results
                 if not title or len(title) < 3:
                     continue
 
-                # Extract phone from search snippet
+                # Extract phone from snippet
                 phone = "N/A"
-                phone_match = re.search(r'[\+]?[\d\s\-\(\)]{7,15}', body)
+                phone_match = re.search(r'[\+]?[\d][\d\s\-\.\(\)]{6,16}[\d]', body)
                 if phone_match:
                     phone = phone_match.group().strip()
 
-                # Try to find email from the website if available
-                email = "N/A"
-                website = url if "google.com/maps" not in url else "N/A"
+                # Website
+                website = url
 
-                # Extract address from snippet
+                # Extract address from snippet (flexible)
                 address = "N/A"
-                if body:
-                    # Common address patterns
-                    addr_match = re.search(r'(?:\d+[\w\s,]+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Lane|Way|Jln|Jalan)[\w\s,]*)', body)
-                    if addr_match:
-                        address = addr_match.group().strip()
+                if body and len(body) > 20:
+                    # Take the first sentence-like chunk as address hint
+                    parts = body.split(".")
+                    for part in parts:
+                        if any(kw in part.lower() for kw in ["street", "road", "ave", "blvd", "jalan", "jln", "floor", "unit", "no.", "suite", "level"]):
+                            address = part.strip()[:100]
+                            break
+
+                # Clean up the name
+                name = title.split(" - ")[0].split(" | ")[0].split(" — ")[0].strip()
+                if len(name) > 60:
+                    name = name[:60]
 
                 results.append({
-                    "Name": title.split(" - ")[0].split(" | ")[0].strip(),
+                    "Name": name,
                     "Phone": phone,
-                    "Website": website if website != "N/A" else url,
-                    "Email": email,
+                    "Website": website,
+                    "Email": "N/A",
                     "Address": address,
                     "Source": "Google (Cloud)",
                     "Notes": f"Extracted via '{keyword}'"
                 })
 
-                processed += 1
-                progress_bar.progress(min(processed / limit, 1.0))
+                progress_bar.progress(min((i + 1) / max(limit, 1), 1.0))
+
+            self._log(f"Extracted {len(results)} leads from search results", "info")
 
             # Email hunting for results with websites
             if results:
@@ -133,9 +162,9 @@ class MapsHunter:
                 import concurrent.futures
 
                 def process_email(item):
-                    website = item.get("Website", "N/A")
-                    if website != "N/A" and "google.com" not in website:
-                        item["Email"] = self._hunt_email(website)
+                    ws = item.get("Website", "N/A")
+                    if ws != "N/A" and "google.com" not in ws:
+                        item["Email"] = self._hunt_email(ws)
                     return item
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
