@@ -64,12 +64,12 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
     try:
         arguments = {"prompt": prompt}
         
-        # Switch to Text-to-Video endpoint if no image is provided,
-        # otherwise use Image-to-Video endpoint. (Cost Optimized Kling 1.5)
-        model_endpoint = "fal-ai/kling-video/v1/standard/text-to-video" if not image_url else "fal-ai/kling-video/v1/standard/image-to-video"
+        # Switch to Hunyuan Video (Modern, Fast, High Quality)
+        model_endpoint = "fal-ai/hunyuan-video"
         
         if image_url:
             arguments["image_url"] = image_url
+            # Hunyuan Video uses image-to-video seamlessly if image_url is provided
             
         result = fal_client.subscribe(
             model_endpoint,
