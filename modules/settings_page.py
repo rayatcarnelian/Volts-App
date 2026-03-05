@@ -34,8 +34,15 @@ def render_settings_page():
         c1, c2 = st.columns(2)
         with c1:
             current_fal = get_user_setting(user_id, "FAL_KEY")
-            fal_key = st.text_input("Fal.ai API Key", value=current_fal, type="password")
-            if st.button("Save Fal Key"):
+            
+            def save_fal_key_callback():
+                # Streamlit triggers this on Enter or unfocus
+                val = st.session_state.get('fal_input_field', '')
+                if val:
+                    save_key("FAL_KEY", val)
+            
+            fal_key = st.text_input("Fal.ai API Key", value=current_fal, type="password", key="fal_input_field", on_change=save_fal_key_callback)
+            if st.button("Save Fal Key (Manual)"):
                 save_key("FAL_KEY", fal_key)
                 
                 

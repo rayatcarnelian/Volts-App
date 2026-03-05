@@ -14,7 +14,7 @@ class AIGhostwriter:
         if self.api_key:
             try:
                 self.client = genai.Client(api_key=self.api_key)
-                self.model_id = "gemini-1.5-flash"
+                self.model_id = "gemini-2.5-flash"
             except Exception as e:
                 print(f"Gemini Init Error: {e}")
                 self.client = None
