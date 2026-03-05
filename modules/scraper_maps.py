@@ -10,6 +10,7 @@ class MapsHunter:
     def __init__(self, browser_type="Edge"):
         self.driver = None
         self.browser_type = browser_type
+        self._is_cloud = False
 
     def _log(self, message, level="info"):
         """Helper to log to Streamlit or Console."""
@@ -32,100 +33,119 @@ class MapsHunter:
             print(f"[{level.upper()}] {message}")
 
     def _setup_driver(self):
-        """Auto-detect the best browser: Cloud Chromium on Linux, Edge on Windows."""
-        import os
+        """On Windows: launch Edge via Selenium. On Linux (Railway): no-op (uses HTTP-based scan)."""
         import platform
-        import shutil
-        import glob
-        import subprocess
         from selenium import webdriver
 
-        is_linux = platform.system() == "Linux"
+        if platform.system() == "Linux":
+            # Cloud mode — no browser needed, scan() will use HTTP-based approach
+            self._log("Cloud mode: Using HTTP-based scraping (no browser needed)", "info")
+            self.driver = None
+            self._is_cloud = True
+            return
 
-        if is_linux:
-            # === CLOUD (Railway / Linux) ===
-            self._log("Initializing Engine (Cloud Chromium)...", "info")
-            from selenium.webdriver.chrome.options import Options as ChromeOptions
-            from selenium.webdriver.chrome.service import Service as ChromeService
+        # === LOCAL (Windows) — Use Edge ===
+        self._log("Initializing Engine (Edge)...", "info")
+        self._is_cloud = False
+        from selenium.webdriver.edge.options import Options as EdgeOptions
+        options = EdgeOptions()
+        options.add_argument("--guest")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--log-level=3")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--remote-allow-origins=*")
+        options.add_argument("--headless=new")
+        self.driver = webdriver.Edge(options=options)
 
-            # Step 1: Try to find Chromium already installed
-            chrome_bin = os.environ.get("CHROME_BIN")
-            if not chrome_bin:
-                for candidate in ["chromium-browser", "chromium", "google-chrome"]:
-                    found = shutil.which(candidate)
-                    if found:
-                        chrome_bin = found
-                        break
+    def _cloud_scan(self, keyword, limit=50):
+        """HTTP-based Google Maps scraping for cloud environments (no browser)."""
+        import re
+        import requests
+        from bs4 import BeautifulSoup
+        from duckduckgo_search import DDGS
+        import streamlit as st
 
-            # Step 2: Check Playwright's cache
-            if not chrome_bin:
-                pw_paths = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"))
-                if pw_paths:
-                    chrome_bin = pw_paths[0]
+        results = []
+        self._log(f"Cloud Scan: Searching for '{keyword}' via DuckDuckGo...", "info")
 
-            # Step 3: If still not found, install via Playwright at runtime
-            if not chrome_bin:
-                self._log("Installing Chromium via Playwright...", "info")
-                try:
-                    result = subprocess.run(
-                        ["python", "-m", "playwright", "install", "chromium"],
-                        capture_output=True, text=True, timeout=120
-                    )
-                    self._log(f"Playwright install stdout: {result.stdout[:200]}", "info")
-                    if result.returncode != 0:
-                        self._log(f"Playwright install stderr: {result.stderr[:200]}", "warning")
-                except Exception as e:
-                    self._log(f"Playwright install failed: {e}", "warning")
+        try:
+            # Use DuckDuckGo to find businesses matching the keyword
+            ddgs = DDGS()
+            search_results = list(ddgs.text(
+                f"{keyword} site:google.com/maps/place OR {keyword} business contact",
+                max_results=limit * 3  # Over-fetch to filter
+            ))
 
-                # Re-check Playwright's cache after install
-                pw_paths = glob.glob(os.path.expanduser("~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"))
-                if pw_paths:
-                    chrome_bin = pw_paths[0]
+            self._log(f"Found {len(search_results)} search results, extracting data...", "info")
 
-            if not chrome_bin:
-                error_msg = "Chromium not found even after Playwright install. Check Railway build logs."
-                self._log(error_msg, "error")
-                raise RuntimeError(error_msg)
+            progress_bar = st.progress(0)
+            processed = 0
 
-            self._log(f"Using Chromium at: {chrome_bin}", "info")
+            for i, result in enumerate(search_results):
+                if len(results) >= limit:
+                    break
 
-            # Auto-discover chromedriver (optional — Selenium Manager can handle it)
-            driver_bin = shutil.which("chromedriver")
+                title = result.get("title", "Unknown Business")
+                body = result.get("body", "")
+                url = result.get("href", "")
 
-            options = ChromeOptions()
-            options.binary_location = chrome_bin
-            options.add_argument("--headless=new")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--window-size=1920,1080")
-            options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_argument("--remote-allow-origins=*")
-            options.add_argument("--log-level=3")
-            options.add_argument("--single-process")
+                # Skip non-business results
+                if not title or len(title) < 3:
+                    continue
 
-            if driver_bin:
-                service = ChromeService(executable_path=driver_bin)
-                self.driver = webdriver.Chrome(service=service, options=options)
-            else:
-                # Let Selenium Manager auto-download the matching chromedriver
-                self.driver = webdriver.Chrome(options=options)
+                # Extract phone from search snippet
+                phone = "N/A"
+                phone_match = re.search(r'[\+]?[\d\s\-\(\)]{7,15}', body)
+                if phone_match:
+                    phone = phone_match.group().strip()
 
-        else:
-            # === LOCAL (Windows) — Use Edge ===
-            self._log("Initializing Engine (Edge)...", "info")
-            from selenium.webdriver.edge.options import Options as EdgeOptions
-            options = EdgeOptions()
-            options.add_argument("--guest")
-            options.add_argument("--window-size=1920,1080")
-            options.add_argument("--disable-blink-features=AutomationControlled")
-            options.add_argument("--log-level=3")
-            options.add_argument("--disable-gpu")
-            options.add_argument("--no-sandbox")
-            options.add_argument("--disable-dev-shm-usage")
-            options.add_argument("--remote-allow-origins=*")
-            options.add_argument("--headless=new")
-            self.driver = webdriver.Edge(options=options)
+                # Try to find email from the website if available
+                email = "N/A"
+                website = url if "google.com/maps" not in url else "N/A"
+
+                # Extract address from snippet
+                address = "N/A"
+                if body:
+                    # Common address patterns
+                    addr_match = re.search(r'(?:\d+[\w\s,]+(?:St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Lane|Way|Jln|Jalan)[\w\s,]*)', body)
+                    if addr_match:
+                        address = addr_match.group().strip()
+
+                results.append({
+                    "Name": title.split(" - ")[0].split(" | ")[0].strip(),
+                    "Phone": phone,
+                    "Website": website if website != "N/A" else url,
+                    "Email": email,
+                    "Address": address,
+                    "Source": "Google (Cloud)",
+                    "Notes": f"Extracted via '{keyword}'"
+                })
+
+                processed += 1
+                progress_bar.progress(min(processed / limit, 1.0))
+
+            # Email hunting for results with websites
+            if results:
+                self._log(f"Hunting emails for {len(results)} leads...", "info")
+                import concurrent.futures
+
+                def process_email(item):
+                    website = item.get("Website", "N/A")
+                    if website != "N/A" and "google.com" not in website:
+                        item["Email"] = self._hunt_email(website)
+                    return item
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    results = list(executor.map(process_email, results))
+
+        except Exception as e:
+            self._log(f"Cloud scan error: {e}", "error")
+            raise
+
+        return results
 
     def scan(self, keyword, limit=50):
         """
@@ -135,8 +155,12 @@ class MapsHunter:
         """
         leads = []
         try:
-            if not self.driver:
+            if not self.driver and not getattr(self, '_is_cloud', False):
                 self._setup_driver()
+
+            # Route to cloud scan if on Linux (no browser)
+            if getattr(self, '_is_cloud', False):
+                return self._cloud_scan(keyword, limit)
                 
             # Direct Search URL
             self._log(f"Searching for '{keyword}'...", "info")
