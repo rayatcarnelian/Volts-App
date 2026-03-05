@@ -880,8 +880,13 @@ elif "Pipeline" in page:
                          progress_bar = st.progress(0)
                          for i, lead in enumerate(pending_leads):
                              st.toast(f"Researching: {lead['name']}...")
-                             success = researcher.research_lead(lead['id'])
-                             if success: count += 1
+                             result = researcher.research_lead(lead['id'])
+                             if result is True: 
+                                 count += 1
+                             elif isinstance(result, str):
+                                 st.toast(f"⚠️ AI API Error: {result[:60]}...", icon="⚠️")
+                             else:
+                                 st.toast(f"⚠️ Failed to research {lead['name']}", icon="⚠️")
                              progress_bar.progress((i + 1) / len(pending_leads))
                              
                          st.success(f"Deep Research Complete: {count}/{len(pending_leads)} Profiles Updated.")

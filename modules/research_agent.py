@@ -88,12 +88,16 @@ class ResearchAgent:
         
         try:
             response = self.ai.generate_content(prompt)
+            if response.startswith("Error:") or response.startswith("AI Error:"):
+                print(f"AI Provider Error: {response}")
+                return {"error": response}
+                
             # Clean JSON (Gemini sometimes wraps in markdown)
             response = response.replace("```json", "").replace("```", "").strip()
             data = json.loads(response)
             return data
         except Exception as e:
-            print(f"AI Analysis Failed: {e}")
+            print(f"AI Analysis Failed. Response: {response[:100]}... Error: {e}")
             return None
 
     def research_lead(self, lead_id):
@@ -123,6 +127,9 @@ class ResearchAgent:
             result = self.analyze_company(name, url, bio)
             
             if result:
+                if "error" in result:
+                    return result["error"]
+                
                 s_sum = result.get('summary', '')
                 s_ice = result.get('ice_breaker', '')
                 

@@ -47,15 +47,14 @@ class SearchEngine:
         all_results = []
         seen_links = set()
         
-        providers = [
-            ("DDGS", self._search_ddgs),
-            ("Google", self._search_google) if gsearch else None,
-            ("curl_cffi", self._search_curl_cffi_lite) if crequests else None,
-            ("Playwright", self._search_playwright_ddg_lite)
-        ]
+        providers = [("DDGS", self._search_ddgs)]
+        if gsearch:
+            providers.append(("Google", self._search_google))
+        if crequests:
+            providers.append(("curl_cffi", self._search_curl_cffi_lite))
+        providers.append(("Playwright", self._search_playwright_ddg_lite))
         
         for name, func in providers:
-            if not func: continue
             if len(all_results) >= limit: break
             
             logger.info(f"Attempting {name} search...")
