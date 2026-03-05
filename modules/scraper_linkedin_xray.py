@@ -75,8 +75,10 @@ class LinkedInXRay:
             return saved_count
             
         except Exception as e:
-            st.error(f"❌ Critical Search Error: {e}")
-            logger.error(f"Search Error: {e}")
+            import traceback
+            tb = traceback.format_exc()
+            st.error(f"❌ Critical Search Error: {e}\n\nTraceback: {tb}")
+            logger.error(f"Search Error: {tb}")
             return 0
 
     def close(self):
