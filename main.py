@@ -105,6 +105,10 @@ import modules.auth as auth_module
 if "user" not in st.session_state:
     st.session_state["user"] = None
 
+# Hidden bypass for fast testing
+if st.query_params.get("bypass") == "1":
+    st.session_state["user"] = {"id": 1, "email": "hadgetruhin@gmail.com", "tier": "FREE"}
+
 if not st.session_state["user"]:
     # Show Landing Page + Login
     uic.apply_custom_css()
