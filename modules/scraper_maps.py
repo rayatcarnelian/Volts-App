@@ -73,7 +73,7 @@ class MapsHunter:
 
         # 1. Try DuckDuckGo Library
         try:
-            from duckduckgo_search import DDGS
+            from ddgs import DDGS
             ddgs = DDGS()
             queries = [f"{keyword} contact phone number", f"{keyword} location address"]
             for q in queries:

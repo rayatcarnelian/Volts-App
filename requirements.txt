@@ -10,7 +10,7 @@ webdriver-manager
 undetected-chromedriver
 playwright
 curl_cffi
-duckduckgo-search
+ddgs
 pydeck
 streamlit-shadcn-ui
 moviepy<2.0.0

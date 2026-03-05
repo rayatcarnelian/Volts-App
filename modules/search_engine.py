@@ -54,19 +54,32 @@ class SearchEngine:
             providers.append(("curl_cffi", self._search_curl_cffi_lite))
         providers.append(("Playwright", self._search_playwright_ddg_lite))
         
-        for name, func in providers:
-            if len(all_results) >= limit: break
-            
-            logger.info(f"Attempting {name} search...")
-            remaining = limit - len(all_results)
-            new_results = func(query, remaining)
-            
-            for r in new_results:
-                link = r.get('link')
-                if link and link not in seen_links:
-                    seen_links.add(link)
-                    all_results.append(r)
+        for provider_entry in providers:
+            try:
+                # Safely unpack the tuple
+                if not isinstance(provider_entry, tuple) or len(provider_entry) != 2:
+                    continue
+                name, func = provider_entry
+                
+                if len(all_results) >= limit: break
+                
+                logger.info(f"Attempting {name} search...")
+                remaining = limit - len(all_results)
+                new_results = func(query, remaining)
+                
+                if not new_results:
+                    continue
                     
+                for r in new_results:
+                    link = r.get('link')
+                    if link and link not in seen_links:
+                        seen_links.add(link)
+                        all_results.append(r)
+            except Exception as e:
+                import traceback
+                logger.error(f"Provider {getattr(provider_entry, '__getitem__', lambda x: 'Unknown')(0)} crashed: {e}")
+                logger.error(traceback.format_exc())
+                
         if not all_results:
             logger.error("All search providers failed to produce results.")
             
@@ -91,12 +104,30 @@ class SearchEngine:
     def _search_google(self, query, limit):
         try:
             results = []
-            for url in gsearch(query, num_results=limit, sleep_interval=5):
-                results.append({
-                    'title': "LinkedIn Profile", 
-                    'link': url,
-                    'snippet': ""
-                })
+            for item in gsearch(query, num_results=limit, sleep_interval=5):
+                link = ""
+                snippet = ""
+                # Handle different gsearch return types (tuple, dict, string)
+                if isinstance(item, str):
+                    link = item
+                elif isinstance(item, dict):
+                    link = item.get('link', item.get('url', ''))
+                    snippet = item.get('snippet', item.get('description', ''))
+                elif isinstance(item, (tuple, list)):
+                    link = item[0] if len(item) > 0 else ""
+                    snippet = item[1] if len(item) > 1 else ""
+                else:
+                    try:
+                        link = getattr(item, 'url', getattr(item, 'link', str(item)))
+                    except:
+                        pass
+                
+                if link:
+                    results.append({
+                        'title': "LinkedIn Profile", 
+                        'link': link,
+                        'snippet': snippet
+                    })
             return results
         except Exception as e:
             logger.error(f"Google Search Error: {e}")
