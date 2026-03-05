@@ -10,6 +10,7 @@ import glob
 import modules.studio_style as style
 import modules.auth as auth
 from modules.payment_handler import handle_payment_success
+from modules.payments import gateway
 import modules.api_fal as fal
 import modules.api_gemini as gemini
 import modules.db_supabase as db
@@ -120,16 +121,19 @@ def render_pricing_page():
             </div>
         """, unsafe_allow_html=True)
         
-        if st.button("Upgrade to PRO", type="primary", use_container_width=True):
-            # Using Simulator Flow for local dev
-            with st.spinner("Processing Simulator Payment..."):
-                time.sleep(2)
-            user = st.session_state["user"]
-            auth.upgrade_user(user["id"], "PRO")
-            st.session_state["user"]["tier"] = "PRO"
-            st.session_state["user"]["credits_image"] = 5000
-            st.balloons()
-            st.rerun()
+        if st.button("Upgrade to PRO (Secure Checkout)", type="primary", use_container_width=True):
+            if gateway.is_configured():
+                # Volts Production server URL
+                success_url = "https://volts-app.up.railway.app/" 
+                cancel_url = "https://volts-app.up.railway.app/"
+                
+                url, err = gateway.create_checkout_session(st.session_state["user"]["email"], success_url=success_url, cancel_url=cancel_url)
+                if url:
+                    st.markdown(f'<meta http-equiv="refresh" content="0; url={url}">', unsafe_allow_html=True)
+                else:
+                    st.error(f"Stripe API Error: {err}")
+            else:
+                st.error("Stripe API keys are missing into production environment.")
             
     if st.button("Back to Studio", use_container_width=True):
          st.session_state["user"]["tier"] = "FREE" 
@@ -142,7 +146,7 @@ def render_app_interface(user):
     st.caption("The High-Volume Social Media Pipeline.")
     
     db_credits = auth.get_user_credits(user["id"])
-    tier = "PRO" # Overridden to give all users full access without subscriptions
+    tier = user.get("tier", "FREE")
             
     st.markdown("---")
     

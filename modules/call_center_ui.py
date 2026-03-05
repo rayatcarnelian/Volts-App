@@ -25,7 +25,7 @@ def render_call_center_ui():
     
     user = st.session_state["user"]
     user_id = user["id"]
-    tier = "PRO" # Unlimited Access
+    tier = user.get("tier", "FREE")
     
     # ================================================================
     # 1. HEADER: Usage Meter
