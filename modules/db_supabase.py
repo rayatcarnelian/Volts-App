@@ -529,5 +529,39 @@ def get_all_user_settings(user_id):
     finally:
         if conn: conn.close()
 
+def save_studio_asset(user_id, asset_type, url, prompt):
+    """Saves a generated image or video to the user's gallery."""
+    conn = get_connection()
+    if not conn: return False
+    try:
+        c = conn.cursor()
+        c.execute('''
+            INSERT INTO studio_assets (user_id, type, url, prompt)
+            VALUES (%s, %s, %s, %s)
+        ''', (user_id, asset_type, url, prompt))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Error saving studio asset: {e}")
+        conn.rollback()
+        return False
+    finally:
+        if conn: conn.close()
+
+def get_user_assets(user_id):
+    """Retrieves all generated assets for a user as a pandas DataFrame."""
+    import pandas as pd
+    conn = get_connection()
+    if not conn: return pd.DataFrame()
+    try:
+        query = "SELECT * FROM studio_assets WHERE user_id = %s ORDER BY created_at DESC"
+        df = pd.read_sql_query(query, conn, params=(user_id,))
+        return df
+    except Exception as e:
+        print(f"Error fetching studio assets: {e}")
+        return pd.DataFrame()
+    finally:
+        if conn: conn.close()
+
 if __name__ == "__main__":
     init_db()
