@@ -3,7 +3,6 @@ Fal.ai API Integration
 Provides high-speed, cost-effective Image and Video generation.
 """
 import os
-import fal_client
 
 def get_user_fal_key() -> str:
     """Retrieves the user's personal Fal key directly from the DB or Environment."""
