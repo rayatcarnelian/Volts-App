@@ -263,62 +263,17 @@ def render_flux_tab(user, tier):
             st.warning("Please enter a prompt.")
 
 def render_video_tab(user, tier):
-    """Avatar Lip-sync and Video gen."""
+    """Avatar Lip-sync and Video gen (LOCKED)."""
     st.markdown("### Video Engine")
-    st.caption("Powered by Fal.ai Sync-Lipsync & Kling 1.5")
     
-    user_id = user["id"]
-    if not db.get_user_setting(user_id, "FAL_KEY"):
-        st.error("FAL_KEY is missing from your User Settings! Go to Settings in the sidebar to add it.")
-        return
-        
-    v_tab1, v_tab2 = st.tabs(["Avatar Lip-Sync (The Hook)", "Cinematic B-Roll (Text-to-Video)"])
-    
-    with v_tab1:
-        st.markdown("""
-        **How it works (The Digital Mask):**
-        Avatar Sync completely eliminates the need to record yourself speaking. You only ever record yourself **once**.
-        
-        1. **Create the Base Video:** Record a 10-second video of yourself sitting silently, looking at the camera. Upload it to a public link (like Google Drive or Imgur).
-        2. **Create the Audio Hook:** Use the AI Brain script and feed it to a voice generator (like ElevenLabs) to create an `.mp3` of the hook. Upload it.
-        3. **The Magic:** Paste both URLs below. Fal.ai will physically map your face and animate your lips and jaw to perfectly match the audio file!
-        """)
-        
-        base_video_url = st.text_input("Base User Video URL (.mp4)")
-        audio_url = st.text_input("Hook Audio URL (.mp3)")
-        
-        if st.button("Sync Avatar (~$0.70 for 7s)", type="primary", disabled=(tier=="FREE")):
-            if base_video_url and audio_url:
-                with st.spinner("Processing lip-sync geometry... (Takes approx 20-40s)"):
-                    # NOTE: Assuming placeholder or live payload here
-                    res = fal.generate_avatar_sync(base_video_url, audio_url)
-                    if res["success"]:
-                        st.video(res["video_url"])
-                        db.save_studio_asset(user["id"], "video", res["video_url"], f"Avatar Sync | Audio: {audio_url}")
-                        st.success("Video synced & saved to Gallery!")
-                    else:
-                        st.error(res.get("error"))
-            else:
-                st.warning("Provide both Video and Audio URLs.")
-                
-    with v_tab2:
-        st.markdown("""
-        **Kling 1.5 Text-to-Video:**
-        Generate a 3 to 5 second dynamic motion clip from text.
-        """)
-        v_prompt = st.text_input("Video Prompt", placeholder="Drone flying over a luxury pool, sunset...")
-        if st.button("Generate Motion B-Roll (~$0.30)", type="primary", disabled=(tier=="FREE")):
-            if v_prompt:
-                with st.spinner("Rendering video cluster... (Takes approx 40s)"):
-                    res = fal.generate_video(v_prompt)
-                    if res["success"]:
-                        st.video(res["video_url"])
-                        db.save_studio_asset(user["id"], "video", res["video_url"], f"Wan 2.5: {v_prompt}")
-                        st.success("Motion B-Roll rendered & saved to Gallery!")
-                    else:
-                        st.error(res.get("error"))
-            else:
-                st.warning("Enter a prompt.")
+    st.warning("🔒 Video Engine Temporarily Locked")
+    st.markdown("""
+    <div style='background:#1A1708; border:1px solid #3D3520; padding:2rem; border-radius:12px; text-align:center;'>
+        <h3 style='color:#C5A55A;'>Cost Optimization Mode Active</h3>
+        <p style='color:#ccc;'>Video generation has been temporarily disabled to preserve your Fal.ai credits.<br>
+        Please use the <b>Image Architect (FLUX)</b> tab for ultra-cheap, high-quality visuals instead.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 def render_gallery_tab(user):
     """Displays all previously generated images and videos for the user."""
