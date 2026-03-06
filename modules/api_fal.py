@@ -11,14 +11,23 @@ def setup_fal_key() -> bool:
     
     try:
         import streamlit as st
-        # Check for user specific key
-        if 'USER_FAL_KEY' in st.session_state and st.session_state['USER_FAL_KEY']:
-            key = st.session_state['USER_FAL_KEY']
-    except:
+        from modules.db_supabase import get_user_setting
+        
+        # Pull straight from the secure DB so it survives session reloads
+        if 'user' in st.session_state and st.session_state['user']:
+            user_id = st.session_state['user']['id']
+            db_key = get_user_setting(user_id, "FAL_KEY")
+            if db_key:
+                key = db_key
+    except Exception as e:
+        print(f"Error resolving User FAL Key: {e}")
         pass
         
     if key:
         os.environ["FAL_KEY"] = key
+        # Explicitly update fal_client strictly to avoid env race conditions
+        import fal_client
+        fal_client.api_key = key 
         return True
     return False
 
