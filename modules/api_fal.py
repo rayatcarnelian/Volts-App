@@ -36,7 +36,6 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
         
     try:
         import fal_client
-        import concurrent.futures
         client = fal_client.SyncClient(key=key)
         
         args = {
@@ -45,18 +44,14 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
             "num_inference_steps": 4,
         }
         
-        # Wrapped in a ThreadPoolExecutor to prevent infinite hangs 
-        # when Fal AI drops the stream silently due to safety filters
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(
-                client.subscribe,
-                "fal-ai/flux/schnell",
-                arguments=args,
-                with_logs=True
-            )
-            # FLUX [schnell] renders in 2-4 seconds. If it takes >45s, 
-            # it's guaranteed to be a silent server hang or safety block.
-            result = future.result(timeout=45)
+        # We MUST use client.run() instead of client.subscribe()
+        # The Python SDK's WebSocket streams (subscribe) are known to cause 
+        # infinite GIL locks on Windows environments when a safety filter is hit.
+        # client.run() is a standard HTTP POST request that correctly times out.
+        result = client.run(
+            "fal-ai/flux/schnell",
+            arguments=args
+        )
         
         if result and "images" in result and result["images"]:
             return {
@@ -66,15 +61,13 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
         else:
             return {"success": False, "error": "No image returned from Fal.ai."}
             
-    except concurrent.futures.TimeoutError:
-        return {
-            "success": False,
-            "error": "Fal AI Timeout: Your prompt may have triggered a safety filter or the server is unresponsive."
-        }
     except Exception as e:
+        error_msg = str(e)
+        if "timeout" in error_msg.lower():
+            return {"success": False, "error": "Fal AI Timeout: Your prompt may have triggered a safety filter."}
         return {
             "success": False,
-            "error": f"Fal API Error: {str(e)}"
+            "error": f"Fal API Error: {error_msg}"
         }
 
 def generate_video(prompt: str, image_url: str = None) -> dict:
@@ -96,10 +89,10 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
         if image_url:
             arguments["image_url"] = image_url
             
-        result = client.subscribe(
+        # Using client.run() for REST API stability instead of WebSockets
+        result = client.run(
             model_endpoint,
-            arguments=arguments,
-            with_logs=True
+            arguments=arguments
         )
         
         if result and "video" in result and result["video"]:
@@ -111,9 +104,12 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
             return {"success": False, "error": "No video returned from Fal.ai"}
             
     except Exception as e:
+        error_msg = str(e)
+        if "timeout" in error_msg.lower():
+            return {"success": False, "error": "Fal AI Timeout: Your prompt may have triggered a safety filter."}
         return {
             "success": False,
-            "error": f"Fal API Video Error: {str(e)}"
+            "error": f"Fal API Video Error: {error_msg}"
         }
 
 def generate_avatar_sync(video_url: str, audio_url: str) -> dict:
@@ -127,14 +123,14 @@ def generate_avatar_sync(video_url: str, audio_url: str) -> dict:
         client = fal_client.SyncClient(key=key)
         
         # Sync Lipsync 2.0 (High quality, $3/min)
-        result = client.subscribe(
+        # Using client.run() for REST API stability instead of WebSockets
+        result = client.run(
             "fal-ai/sync-lipsync",
             arguments={
                 "video_url": video_url,
                 "audio_url": audio_url,
                 "sync_mode": "cut_off" # Trims to match whichever is shortest
-            },
-            with_logs=True
+            }
         )
         
         if result and "video" in result and result["video"]:
@@ -146,7 +142,10 @@ def generate_avatar_sync(video_url: str, audio_url: str) -> dict:
              return {"success": False, "error": "Lip-sync rendering failed on Fal.ai"}
             
     except Exception as e:
+        error_msg = str(e)
+        if "timeout" in error_msg.lower():
+            return {"success": False, "error": "Fal AI Timeout."}
         return {
             "success": False,
-            "error": f"Fal API Avatar Sync Error: {str(e)}"
+            "error": f"Fal API Avatar Sync Error: {error_msg}"
         }
