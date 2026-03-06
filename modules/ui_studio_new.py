@@ -233,8 +233,9 @@ def render_flux_tab(user, tier):
     st.caption("Powered by Fal.ai FLUX [schnell]")
     
     user_id = user["id"]
-    if not db.get_user_setting(user_id, "FAL_KEY"):
-        st.error("FAL_KEY is missing from your User Settings! Go to Settings in the sidebar to add it.")
+    has_key = bool(db.get_user_setting(user_id, "FAL_KEY") or os.getenv("FAL_KEY"))
+    if not has_key:
+        st.error("FAL_KEY is missing! Go to Settings in the sidebar to add it, or set it as an environment variable.")
         
     c1, c2 = st.columns([2, 1])
     with c1:
@@ -249,7 +250,7 @@ def render_flux_tab(user, tier):
         display_choice = st.selectbox("Format", list(size_options.keys()))
         aspect_ratio = size_options[display_choice]
     
-    if st.button("Generate B-Roll Image (~$0.006)", type="primary", disabled=(tier=="FREE") or not fal.setup_fal_key()):
+    if st.button("Generate B-Roll Image (~$0.006)", type="primary", disabled=(tier=="FREE") or not has_key):
         if prompt:
             with st.spinner("Rendering via FLUX.1 [schnell]..."):
                 res = fal.generate_image(prompt, image_size=aspect_ratio)
