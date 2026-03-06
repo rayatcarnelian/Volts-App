@@ -65,8 +65,8 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
         arguments = {"prompt": prompt}
         
         # Switch to Text-to-Video endpoint if no image is provided,
-        # otherwise use Image-to-Video endpoint. (Cost Optimized Kling 1.0/1.5)
-        model_endpoint = "fal-ai/kling-video/v1/standard/text-to-video" if not image_url else "fal-ai/kling-video/v1/standard/image-to-video"
+        # otherwise use Image-to-Video endpoint. (Wan 2.1 - Ultra Fast & Cost Effective)
+        model_endpoint = "fal-ai/wan-t2v" if not image_url else "fal-ai/wan-i2v"
         
         if image_url:
             arguments["image_url"] = image_url
