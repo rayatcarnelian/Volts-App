@@ -5,8 +5,8 @@ Provides high-speed, cost-effective Image and Video generation.
 import os
 import fal_client
 
-def setup_fal_key() -> bool:
-    """Injects the user's personal Fal key (if set) for this generation run."""
+def get_user_fal_key() -> str:
+    """Retrieves the user's personal Fal key directly from the DB or Environment."""
     key = os.getenv("FAL_KEY")
     
     try:
@@ -23,25 +23,25 @@ def setup_fal_key() -> bool:
         print(f"Error resolving User FAL Key: {e}")
         pass
         
-    if key:
-        os.environ["FAL_KEY"] = key
-        # Explicitly update fal_client strictly to avoid env race conditions
-        import fal_client
-        fal_client.api_key = key 
-        return True
-    return False
+    return key
+
 
 def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
     """Generate an image using FLUX.1 [schnell] for ultra-fast, cheap B-Roll."""
-    if not setup_fal_key():
+    key = get_user_fal_key()
+    if not key:
         return {
             "success": False, 
-            "error": "Fal API key not found. Please add FAL_KEY to your .env file."
+            "error": "Fal API key not found. Please add it in Settings."
         }
         
     try:
+        import fal_client
+        # Dynamically instantiate a fresh synchronous client with the specific user's key
+        client = fal_client.SyncClient(key=key)
+        
         # Using the insanely fast and cheap FLUX.1 [schnell] model
-        result = fal_client.subscribe(
+        result = client.subscribe(
             "fal-ai/flux/schnell",
             arguments={
                 "prompt": prompt,
@@ -66,11 +66,15 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
         }
 
 def generate_video(prompt: str, image_url: str = None) -> dict:
-    """Generate a short B-Roll video clip using Kling 1.5 Standard (Cost-Optimized)."""
-    if not setup_fal_key():
+    """Generate a short B-Roll video clip."""
+    key = get_user_fal_key()
+    if not key:
         return {"success": False, "error": "Fal API key missing."}
         
     try:
+        import fal_client
+        client = fal_client.SyncClient(key=key)
+        
         arguments = {"prompt": prompt}
         
         # Switch to Text-to-Video endpoint if no image is provided,
@@ -80,7 +84,7 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
         if image_url:
             arguments["image_url"] = image_url
             
-        result = fal_client.subscribe(
+        result = client.subscribe(
             model_endpoint,
             arguments=arguments,
             with_logs=True
@@ -102,12 +106,16 @@ def generate_video(prompt: str, image_url: str = None) -> dict:
 
 def generate_avatar_sync(video_url: str, audio_url: str) -> dict:
     """Lip-sync a base avatar video to a new audio track using Sync Lipsync."""
-    if not setup_fal_key():
+    key = get_user_fal_key()
+    if not key:
         return {"success": False, "error": "Fal API key missing."}
         
     try:
+        import fal_client
+        client = fal_client.SyncClient(key=key)
+        
         # Sync Lipsync 2.0 (High quality, $3/min)
-        result = fal_client.subscribe(
+        result = client.subscribe(
             "fal-ai/sync-lipsync",
             arguments={
                 "video_url": video_url,
