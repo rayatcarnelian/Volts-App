@@ -36,19 +36,27 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
         
     try:
         import fal_client
-        # Dynamically instantiate a fresh synchronous client with the specific user's key
+        import concurrent.futures
         client = fal_client.SyncClient(key=key)
         
-        # Using the insanely fast and cheap FLUX.1 [schnell] model
-        result = client.subscribe(
-            "fal-ai/flux/schnell",
-            arguments={
-                "prompt": prompt,
-                "image_size": image_size,
-                "num_inference_steps": 4, # Standard for schnell
-            },
-            with_logs=True
-        )
+        args = {
+            "prompt": prompt,
+            "image_size": image_size,
+            "num_inference_steps": 4,
+        }
+        
+        # Wrapped in a ThreadPoolExecutor to prevent infinite hangs 
+        # when Fal AI drops the stream silently due to safety filters
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                client.subscribe,
+                "fal-ai/flux/schnell",
+                arguments=args,
+                with_logs=True
+            )
+            # FLUX [schnell] renders in 2-4 seconds. If it takes >45s, 
+            # it's guaranteed to be a silent server hang or safety block.
+            result = future.result(timeout=45)
         
         if result and "images" in result and result["images"]:
             return {
@@ -56,8 +64,13 @@ def generate_image(prompt: str, image_size: str = "landscape_16_9") -> dict:
                 "image_url": result["images"][0]["url"],
             }
         else:
-            return {"success": False, "error": "No image returned from Fal.ai"}
+            return {"success": False, "error": "No image returned from Fal.ai."}
             
+    except concurrent.futures.TimeoutError:
+        return {
+            "success": False,
+            "error": "Fal AI Timeout: Your prompt may have triggered a safety filter or the server is unresponsive."
+        }
     except Exception as e:
         return {
             "success": False,
